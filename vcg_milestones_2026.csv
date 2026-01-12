@@ -1,0 +1,100 @@
+"deployment","go_live_date","release_version"
+"Wed, 7/8/26","2026-07-08","Clarity: 26.07.08
+Jira: 26.07.08"
+"Fri, 7/10/26","2026-07-10","Clarity: 26.07.10
+Jira: 26.07.10"
+"Wed, 7/15/26","2026-07-15","Clarity: 26.07.15
+Jira: 26.07.15"
+"Fri, 7/17/26","2026-07-17","Clarity: 26.07.17
+Jira: 26.07.17"
+"Wed, 7/22/26","2026-07-22","Clarity: 26.07.22
+Jira: 26.07.22"
+"Fri, 7/24/26","2026-07-24","Clarity: 26.07.24
+Jira: 26.07.24"
+"Wed, 7/29/26","2026-07-29","Clarity: 26.07.29
+Jira: 26.07.29"
+"Fri, 7/31/26","2026-07-31","Clarity: 26.07.31
+Jira: 26.07.31"
+"Wed, 8/5/26","2026-08-05","Clarity: 26.08.05
+Jira: 26.08.05"
+"Fri, 8/7/26","2026-08-07","Clarity: 26.08.07
+Jira: 26.08.07"
+"Wed, 8/12/26","2026-08-12","Clarity: 26.08.12
+Jira: 26.08.12"
+"Fri, 8/14/26","2026-08-14","Clarity: 26.08.14
+Jira: 26.08.14"
+"Wed, 8/19/26","2026-08-19","Clarity: 26.08.19
+Jira: 26.08.19"
+"Fri, 8/21/26","2026-08-21","Clarity: 26.08.21
+Jira: 26.08.21"
+"Wed, 8/26/26","2026-08-26","Clarity: 26.08.26
+Jira: 26.08.26"
+"Fri, 8/28/26","2026-08-28","Clarity: 26.08.28
+Jira: 26.08.28"
+"Wed, 9/2/26","2026-09-02","Clarity: 26.09.02
+Jira: 26.09.02"
+"Fri, 9/4/26","2026-09-04","Clarity: 26.09.04
+Jira: 26.09.04"
+"Labor Day Moratorium: 9/4 @18:00 - 9/8 @ 06:00","Labor Day Moratorium: 9/4 @18:00 - 9/8 @ 06:00",""
+"Verizon Wireless Moratorium Period: 9/8 @18:00 - 9/21 @ 06:00","Verizon Wireless Moratorium Period: 9/8 @18:00 - 9/21 @ 06:00",""
+"Wed, 9/9/26","2026-09-09","Clarity: 26.09.09
+Jira: 26.09.09"
+"Fri, 9/11/26","2026-09-11","Clarity: 26.09.11
+Jira: 26.09.11"
+"Wed, 9/30/26","2026-09-30","Clarity: 26.09.30
+Jira: 26.09.30"
+"Wed, 10/7/26","2026-10-07","Clarity: 26.10.07
+Jira: 26.10.07"
+"Fri, 10/9/26","2026-10-09","Clarity: 26.10.09
+Jira: 26.10.09"
+"Wed, 10/14/26","2026-10-14","Clarity: 26.10.14
+Jira: 26.10.14"
+"Fri, 10/16/26","2026-10-16","Clarity: 26.10.16
+Jira: 26.10.16"
+"Fri, 10/23/26","2026-10-23","Clarity: 26.10.23
+Jira: 26.10.23"
+"Wed, 10/28/26","2026-10-28","Clarity: 26.10.28
+Jira: 26.10.28"
+"Fri, 10/30/26","2026-10-30","Clarity: 26.10.30
+Jira: 26.10.30"
+"Wed, 11/4/26","2026-11-04","Clarity: 26.11.04
+Jira: 26.11.04"
+"Fri, 11/6/26","2026-11-06","Clarity: 26.11.06
+Jira: 26.11.06"
+"Wed, 11/18/26","2026-11-18","Clarity: 26.11.18
+Jira: 26.11.18"
+"Fri, 11/20/26","2026-11-20","Clarity: 26.11.20
+Jira: 26.11.20"
+"Thanksgiving Holiday Moratorium: 11/20 @18:00 - 12/01 @ 06:00","Thanksgiving Holiday Moratorium: 11/20 @18:00 - 12/01 @ 06:00",""
+"Wed, 12/2/26","2026-12-02","Clarity: 26.12.02
+Jira: 26.12.02"
+"Fri, 12/4/26","2026-12-04","Clarity: 26.12.04
+Jira: 26.12.04"
+"Wed, 12/9/26","2026-12-09","Clarity: 26.12.09
+Jira: 26.12.09"
+"Fri, 12/11/26","2026-12-11","Clarity: 26.12.11
+Jira: 26.12.11"
+"Christmas Moratorium: 12/18 @18:00 - 1/04 @ 06:00","Christmas Moratorium: 12/18 @18:00 - 1/04 @ 06:00",""
+"Wed, 1/6/27","2027-01-06","Clarity: 27.01.06
+Jira: 27.01.06"
+"Fri, 1/8/27","2027-01-08","Clarity: 27.01.08
+Jira: 27.01.08"
+"Wed, 1/13/27","2027-01-13","Clarity: 27.01.13
+Jira: 27.01.13"
+"Milestones are subject to change. Please refer to the Release Plan Portal for the most up-to-date information: https://releaseplan.ebiz.verizon.com
+* Deployment Freeze (2:00 PM EST / 11:30 PM IST) - Indicates the (cid:279)nal deployments to Beta2 environment prior to the start of Beta2 Regression. No additional Beta2 deployments will be promoted post deployment freeze.
+** Smart Regression Beta2 (2:30 PM EST / 12:00 AM IST) - End-to-End testing to begin in Beta2 environment.
+*** Canary Live By - Features rolled out to a speci(cid:279)c segment of production users. Canary environments are regression tested post Canary deployments. If Canary is not live by 8:00 AM ET (5:30 PM IST) on the day of the deployment, the scheduled 2:00 PM ET (11:30 PM IST) Canary
+deployment will be cancelled.
+? Go Live Date - Production deployment will begin at 10:00 PM ET the day prior to Go Live Date (US) / 7:30 AM IST on Go Live date (India). Release deployments should be completed by 6:00 AM ET/3:30 PM IST on the deployment Go Live Date.
+? Billing Deployments - VBG (mainframe billing) will continue with three-week releases as outline within the milestone document.
+Consumer Billing will begin supporting Feature Flags on January 1, 2026. ACT teams should collaborate with the VISION2 teams on Feature Flag requirements for their user stories.
+Digital First deployments with Mainframe Billing Changes include preponed freeze period (3 days) for full regression and additional Canary window (2 days).","Milestones are subject to change. Please refer to the Release Plan Portal for the most up-to-date information: https://releaseplan.ebiz.verizon.com
+* Deployment Freeze (2:00 PM EST / 11:30 PM IST) - Indicates the (cid:279)nal deployments to Beta2 environment prior to the start of Beta2 Regression. No additional Beta2 deployments will be promoted post deployment freeze.
+** Smart Regression Beta2 (2:30 PM EST / 12:00 AM IST) - End-to-End testing to begin in Beta2 environment.
+*** Canary Live By - Features rolled out to a speci(cid:279)c segment of production users. Canary environments are regression tested post Canary deployments. If Canary is not live by 8:00 AM ET (5:30 PM IST) on the day of the deployment, the scheduled 2:00 PM ET (11:30 PM IST) Canary
+deployment will be cancelled.
+? Go Live Date - Production deployment will begin at 10:00 PM ET the day prior to Go Live Date (US) / 7:30 AM IST on Go Live date (India). Release deployments should be completed by 6:00 AM ET/3:30 PM IST on the deployment Go Live Date.
+? Billing Deployments - VBG (mainframe billing) will continue with three-week releases as outline within the milestone document.
+Consumer Billing will begin supporting Feature Flags on January 1, 2026. ACT teams should collaborate with the VISION2 teams on Feature Flag requirements for their user stories.
+Digital First deployments with Mainframe Billing Changes include preponed freeze period (3 days) for full regression and additional Canary window (2 days).",""

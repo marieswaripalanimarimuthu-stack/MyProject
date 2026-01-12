@@ -1,0 +1,226 @@
+{
+  "source": "https://releaseplan.ebiz.verizon.com/uploads/files/keymilestones.pdf",
+  "count": 44,
+  "rows": [
+    {
+      "deployment": "Wed, 7/8/26",
+      "go_live_date": "Wed, 7/8/26",
+      "release_version": "Clarity: 26.07.08\nJira: 26.07.08"
+    },
+    {
+      "deployment": "Fri, 7/10/26",
+      "go_live_date": "Fri, 7/10/26",
+      "release_version": "Clarity: 26.07.10\nJira: 26.07.10"
+    },
+    {
+      "deployment": "Wed, 7/15/26",
+      "go_live_date": "Wed, 7/15/26",
+      "release_version": "Clarity: 26.07.15\nJira: 26.07.15"
+    },
+    {
+      "deployment": "Fri, 7/17/26",
+      "go_live_date": "Fri, 7/17/26",
+      "release_version": "Clarity: 26.07.17\nJira: 26.07.17"
+    },
+    {
+      "deployment": "Wed, 7/22/26",
+      "go_live_date": "Wed, 7/22/26",
+      "release_version": "Clarity: 26.07.22\nJira: 26.07.22"
+    },
+    {
+      "deployment": "Fri, 7/24/26",
+      "go_live_date": "Fri, 7/24/26",
+      "release_version": "Clarity: 26.07.24\nJira: 26.07.24"
+    },
+    {
+      "deployment": "Wed, 7/29/26",
+      "go_live_date": "Wed, 7/29/26",
+      "release_version": "Clarity: 26.07.29\nJira: 26.07.29"
+    },
+    {
+      "deployment": "Fri, 7/31/26",
+      "go_live_date": "Fri, 7/31/26",
+      "release_version": "Clarity: 26.07.31\nJira: 26.07.31"
+    },
+    {
+      "deployment": "Wed, 8/5/26",
+      "go_live_date": "Wed, 8/5/26",
+      "release_version": "Clarity: 26.08.05\nJira: 26.08.05"
+    },
+    {
+      "deployment": "Fri, 8/7/26",
+      "go_live_date": "Fri, 8/7/26",
+      "release_version": "Clarity: 26.08.07\nJira: 26.08.07"
+    },
+    {
+      "deployment": "Wed, 8/12/26",
+      "go_live_date": "Wed, 8/12/26",
+      "release_version": "Clarity: 26.08.12\nJira: 26.08.12"
+    },
+    {
+      "deployment": "Fri, 8/14/26",
+      "go_live_date": "Fri, 8/14/26",
+      "release_version": "Clarity: 26.08.14\nJira: 26.08.14"
+    },
+    {
+      "deployment": "Wed, 8/19/26",
+      "go_live_date": "Wed, 8/19/26",
+      "release_version": "Clarity: 26.08.19\nJira: 26.08.19"
+    },
+    {
+      "deployment": "Fri, 8/21/26",
+      "go_live_date": "Fri, 8/21/26",
+      "release_version": "Clarity: 26.08.21\nJira: 26.08.21"
+    },
+    {
+      "deployment": "Wed, 8/26/26",
+      "go_live_date": "Wed, 8/26/26",
+      "release_version": "Clarity: 26.08.26\nJira: 26.08.26"
+    },
+    {
+      "deployment": "Fri, 8/28/26",
+      "go_live_date": "Fri, 8/28/26",
+      "release_version": "Clarity: 26.08.28\nJira: 26.08.28"
+    },
+    {
+      "deployment": "Wed, 9/2/26",
+      "go_live_date": "Wed, 9/2/26",
+      "release_version": "Clarity: 26.09.02\nJira: 26.09.02"
+    },
+    {
+      "deployment": "Fri, 9/4/26",
+      "go_live_date": "Fri, 9/4/26",
+      "release_version": "Clarity: 26.09.04\nJira: 26.09.04"
+    },
+    {
+      "deployment": "Labor Day Moratorium: 9/4 @18:00 - 9/8 @ 06:00",
+      "go_live_date": "Labor Day Moratorium: 9/4 @18:00 - 9/8 @ 06:00",
+      "release_version": ""
+    },
+    {
+      "deployment": "Verizon Wireless Moratorium Period: 9/8 @18:00 - 9/21 @ 06:00",
+      "go_live_date": "Verizon Wireless Moratorium Period: 9/8 @18:00 - 9/21 @ 06:00",
+      "release_version": ""
+    },
+    {
+      "deployment": "Wed, 9/9/26",
+      "go_live_date": "Wed, 9/9/26",
+      "release_version": "Clarity: 26.09.09\nJira: 26.09.09"
+    },
+    {
+      "deployment": "Fri, 9/11/26",
+      "go_live_date": "Fri, 9/11/26",
+      "release_version": "Clarity: 26.09.11\nJira: 26.09.11"
+    },
+    {
+      "deployment": "Wed, 9/30/26",
+      "go_live_date": "Wed, 9/30/26",
+      "release_version": "Clarity: 26.09.30\nJira: 26.09.30"
+    },
+    {
+      "deployment": "Wed, 10/7/26",
+      "go_live_date": "Wed, 10/7/26",
+      "release_version": "Clarity: 26.10.07\nJira: 26.10.07"
+    },
+    {
+      "deployment": "Fri, 10/9/26",
+      "go_live_date": "Fri, 10/9/26",
+      "release_version": "Clarity: 26.10.09\nJira: 26.10.09"
+    },
+    {
+      "deployment": "Wed, 10/14/26",
+      "go_live_date": "Wed, 10/14/26",
+      "release_version": "Clarity: 26.10.14\nJira: 26.10.14"
+    },
+    {
+      "deployment": "Fri, 10/16/26",
+      "go_live_date": "Fri, 10/16/26",
+      "release_version": "Clarity: 26.10.16\nJira: 26.10.16"
+    },
+    {
+      "deployment": "Fri, 10/23/26",
+      "go_live_date": "Fri, 10/23/26",
+      "release_version": "Clarity: 26.10.23\nJira: 26.10.23"
+    },
+    {
+      "deployment": "Wed, 10/28/26",
+      "go_live_date": "Wed, 10/28/26",
+      "release_version": "Clarity: 26.10.28\nJira: 26.10.28"
+    },
+    {
+      "deployment": "Fri, 10/30/26",
+      "go_live_date": "Fri, 10/30/26",
+      "release_version": "Clarity: 26.10.30\nJira: 26.10.30"
+    },
+    {
+      "deployment": "Wed, 11/4/26",
+      "go_live_date": "Wed, 11/4/26",
+      "release_version": "Clarity: 26.11.04\nJira: 26.11.04"
+    },
+    {
+      "deployment": "Fri, 11/6/26",
+      "go_live_date": "Fri, 11/6/26",
+      "release_version": "Clarity: 26.11.06\nJira: 26.11.06"
+    },
+    {
+      "deployment": "Wed, 11/18/26",
+      "go_live_date": "Wed, 11/18/26",
+      "release_version": "Clarity: 26.11.18\nJira: 26.11.18"
+    },
+    {
+      "deployment": "Fri, 11/20/26",
+      "go_live_date": "Fri, 11/20/26",
+      "release_version": "Clarity: 26.11.20\nJira: 26.11.20"
+    },
+    {
+      "deployment": "Thanksgiving Holiday Moratorium: 11/20 @18:00 - 12/01 @ 06:00",
+      "go_live_date": "Thanksgiving Holiday Moratorium: 11/20 @18:00 - 12/01 @ 06:00",
+      "release_version": ""
+    },
+    {
+      "deployment": "Wed, 12/2/26",
+      "go_live_date": "Wed, 12/2/26",
+      "release_version": "Clarity: 26.12.02\nJira: 26.12.02"
+    },
+    {
+      "deployment": "Fri, 12/4/26",
+      "go_live_date": "Fri, 12/4/26",
+      "release_version": "Clarity: 26.12.04\nJira: 26.12.04"
+    },
+    {
+      "deployment": "Wed, 12/9/26",
+      "go_live_date": "Wed, 12/9/26",
+      "release_version": "Clarity: 26.12.09\nJira: 26.12.09"
+    },
+    {
+      "deployment": "Fri, 12/11/26",
+      "go_live_date": "Fri, 12/11/26",
+      "release_version": "Clarity: 26.12.11\nJira: 26.12.11"
+    },
+    {
+      "deployment": "Christmas Moratorium: 12/18 @18:00 - 1/04 @ 06:00",
+      "go_live_date": "Christmas Moratorium: 12/18 @18:00 - 1/04 @ 06:00",
+      "release_version": ""
+    },
+    {
+      "deployment": "Wed, 1/6/27",
+      "go_live_date": "Wed, 1/6/27",
+      "release_version": "Clarity: 27.01.06\nJira: 27.01.06"
+    },
+    {
+      "deployment": "Fri, 1/8/27",
+      "go_live_date": "Fri, 1/8/27",
+      "release_version": "Clarity: 27.01.08\nJira: 27.01.08"
+    },
+    {
+      "deployment": "Wed, 1/13/27",
+      "go_live_date": "Wed, 1/13/27",
+      "release_version": "Clarity: 27.01.13\nJira: 27.01.13"
+    },
+    {
+      "deployment": "Milestones are subject to change. Please refer to the Release Plan Portal for the most up-to-date information: https://releaseplan.ebiz.verizon.com\n* Deployment Freeze (2:00 PM EST / 11:30 PM IST) - Indicates the (cid:279)nal deployments to Beta2 environment prior to the start of Beta2 Regression. No additional Beta2 deployments will be promoted post deployment freeze.\n** Smart Regression Beta2 (2:30 PM EST / 12:00 AM IST) - End-to-End testing to begin in Beta2 environment.\n*** Canary Live By - Features rolled out to a speci(cid:279)c segment of production users. Canary environments are regression tested post Canary deployments. If Canary is not live by 8:00 AM ET (5:30 PM IST) on the day of the deployment, the scheduled 2:00 PM ET (11:30 PM IST) Canary\ndeployment will be cancelled.\n\u2726 Go Live Date - Production deployment will begin at 10:00 PM ET the day prior to Go Live Date (US) / 7:30 AM IST on Go Live date (India). Release deployments should be completed by 6:00 AM ET/3:30 PM IST on the deployment Go Live Date.\n\u2020 Billing Deployments - VBG (mainframe billing) will continue with three-week releases as outline within the milestone document.\nConsumer Billing will begin supporting Feature Flags on January 1, 2026. ACT teams should collaborate with the VISION2 teams on Feature Flag requirements for their user stories.\nDigital First deployments with Mainframe Billing Changes include preponed freeze period (3 days) for full regression and additional Canary window (2 days).",
+      "go_live_date": "Milestones are subject to change. Please refer to the Release Plan Portal for the most up-to-date information: https://releaseplan.ebiz.verizon.com\n* Deployment Freeze (2:00 PM EST / 11:30 PM IST) - Indicates the (cid:279)nal deployments to Beta2 environment prior to the start of Beta2 Regression. No additional Beta2 deployments will be promoted post deployment freeze.\n** Smart Regression Beta2 (2:30 PM EST / 12:00 AM IST) - End-to-End testing to begin in Beta2 environment.\n*** Canary Live By - Features rolled out to a speci(cid:279)c segment of production users. Canary environments are regression tested post Canary deployments. If Canary is not live by 8:00 AM ET (5:30 PM IST) on the day of the deployment, the scheduled 2:00 PM ET (11:30 PM IST) Canary\ndeployment will be cancelled.\n\u2726 Go Live Date - Production deployment will begin at 10:00 PM ET the day prior to Go Live Date (US) / 7:30 AM IST on Go Live date (India). Release deployments should be completed by 6:00 AM ET/3:30 PM IST on the deployment Go Live Date.\n\u2020 Billing Deployments - VBG (mainframe billing) will continue with three-week releases as outline within the milestone document.\nConsumer Billing will begin supporting Feature Flags on January 1, 2026. ACT teams should collaborate with the VISION2 teams on Feature Flag requirements for their user stories.\nDigital First deployments with Mainframe Billing Changes include preponed freeze period (3 days) for full regression and additional Canary window (2 days).",
+      "release_version": ""
+    }
+  ]
+}

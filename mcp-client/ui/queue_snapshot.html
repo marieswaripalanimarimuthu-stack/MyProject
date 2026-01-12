@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Queue Snapshot</title>
+  <style>
+    body { font-family: Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 16px; color: #222; }
+    h1 { margin: 0 0 12px; font-size: 20px; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    input[type=text], input[type=datetime-local], select, textarea { border: 1px solid #ccc; border-radius: 4px; padding: 6px 8px; font-size: 13px; }
+    textarea { width: 100%; min-height: 120px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    button { padding: 6px 12px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; font-size: 13px; }
+    button.primary { background: #0b5fff; color: #fff; border-color: #0b5fff; }
+    button.secondary { background: #f6f8fa; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .card { border: 1px solid #ddd; border-radius: 6px; padding: 12px; background: #fff; }
+    .section { margin-top: 12px; }
+    .muted { color: #666; }
+    .spinner { width: 16px; height: 16px; border: 2px solid #ddd; border-top-color: #0b5fff; border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align: left; }
+    th { background: #f8f9fb; position: sticky; top: 0; z-index: 1; }
+    .table-wrap { max-height: 60vh; overflow: auto; border: 1px solid #eee; border-radius: 6px; }
+    .right { margin-left: auto; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: #eef2ff; color: #1e2a78; border: 1px solid #c7d2fe; }
+    .note { font-size: 12px; color: #555; }
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  </style>
+</head>
+<body>
+  <h1>Queue Snapshot</h1>
+
+  <div class="card">
+    <div class="toolbar">
+      <input id="qsQueue" type="text" placeholder="Queue Name (optional)" />
+      <select id="qsStatus">
+        <option value="">All Statuses</option>
+        <option>New</option>
+        <option>Open</option>
+        <option>Pending</option>
+        <option>Resolved</option>
+        <option>Closed</option>
+      </select>
+      <select id="qsQuickRange">
+        <option value="24h">Last 24 hours</option>
+        <option value="48h">Last 48 hours</option>
+        <option value="7d">Last 7 days</option>
+        <option value="today">Today</option>
+        <option value="custom">Custom...</option>
+      </select>
+      <input id="qsStart" type="datetime-local" />
+      <input id="qsEnd" type="datetime-local" />
+      <button id="qsRun" class="primary">Run Snapshot</button>
+      <span id="qsBusy" class="spinner" style="display:none;"></span>
+      <span id="qsCount" class="pill" title="Rows returned" style="display:none;">0 rows</span>
+      <button id="qsExportCsv" class="secondary right">Export CSV</button>
+    </div>
+    <div class="section">
+      <div class="note">SQL (editable): Use binds :queue, :status, :start_dt, :end_dt as needed. Adjust table/columns to your schema.</div>
+      <textarea id="qsSql"></textarea>
+    </div>
+  </div>
+
+  <div class="section table-wrap">
+    <table>
+      <thead id="qsHead"></thead>
+      <tbody id="qsBody"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const SERVER = location.origin.replace(/\/$/, '');
+
+    const qsQueue = document.getElementById('qsQueue');
+    const qsStatus = document.getElementById('qsStatus');
+    const qsQuickRange = document.getElementById('qsQuickRange');
+    const qsStart = document.getElementById('qsStart');
+    const qsEnd = document.getElementById('qsEnd');
+    const qsRun = document.getElementById('qsRun');
+    const qsBusy = document.getElementById('qsBusy');
+    const qsCount = document.getElementById('qsCount');
+    const qsExportCsv = document.getElementById('qsExportCsv');
+    const qsSql = document.getElementById('qsSql');
+    const qsHead = document.getElementById('qsHead');
+    const qsBody = document.getElementById('qsBody');
+    // Modal for cartid details
+    const detailsModal = document.createElement('div');
+    detailsModal.id = 'cartDetailsModal';
+    detailsModal.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.35); z-index:1000;';
+    detailsModal.innerHTML = `
+      <div style="background:#fff; border-radius:8px; padding:12px; width: 760px; max-width:95%; margin: 6% auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); position:relative; max-height:80vh; overflow:auto;">
+        <button id="cartDetailsClose" style="position:absolute; top:8px; right:8px; border:none; background:#eee; border-radius:12px; width:24px; height:24px; cursor:pointer;">×</button>
+        <h3 style="margin:0 0 8px;">Order Details for <span id="cartDetailsCartId"></span></h3>
+        <div id="cartDetailsBody" class="muted">Loading…</div>
+      </div>`;
+    document.body.appendChild(detailsModal);
+    document.getElementById('cartDetailsClose').addEventListener('click', () => { detailsModal.style.display = 'none'; });
+
+    function pad2(n){ return String(n).padStart(2, '0'); }
+    function toLocalInput(dt){
+      const y = dt.getFullYear();
+      const m = pad2(dt.getMonth()+1);
+      const d = pad2(dt.getDate());
+      const hh = pad2(dt.getHours());
+      const mm = pad2(dt.getMinutes());
+      return `${y}-${m}-${d}T${hh}:${mm}`;
+    }
+    function toSqlTimestampStr(dtLocalStr){
+      if (!dtLocalStr) return '';
+      const s = dtLocalStr.replace('T', '');
+      const [datePart, timePart] = dtLocalStr.split('T');
+      const [y,m,d] = datePart.split('-');
+      const [hh,mm] = (timePart || '00:00').split(':');
+      return `${y}-${m}-${d} ${hh}:${mm}:00`;
+    }
+    function applyQuickRange(val){
+      const now = new Date();
+      if (val === 'today'){
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        qsStart.value = toLocalInput(start);
+        qsEnd.value = toLocalInput(now);
+      } else if (val === '24h'){
+        const start = new Date(now.getTime() - 24*3600*1000);
+        qsStart.value = toLocalInput(start);
+        qsEnd.value = toLocalInput(now);
+      } else if (val === '48h'){
+        const start = new Date(now.getTime() - 48*3600*1000);
+        qsStart.value = toLocalInput(start);
+        qsEnd.value = toLocalInput(now);
+      } else if (val === '7d'){
+        const start = new Date(now.getTime() - 7*24*3600*1000);
+        qsStart.value = toLocalInput(start);
+        qsEnd.value = toLocalInput(now);
+      } else {
+        // custom
+      }
+    }
+
+    function setDefaultSql(){
+      const tmpl = `-- Example only: adjust table and columns to your environment\n`+
+`SELECT q.queue_name, q.caseid, q.workobjectstatus, q.pystatuswork, q.pxcreatedatetime\n`+
+`FROM POJO_data.vzcm_data_ordersubmitentity q\n`+
+`WHERE (:queue IS NULL OR q.queue_name = :queue)\n`+
+`  AND (:status IS NULL OR q.workobjectstatus = :status)\n`+
+`  AND (:start_dt IS NULL OR q.pxcreatedatetime >= TO_TIMESTAMP(:start_dt, 'YYYY-MM-DD HH24:MI:SS'))\n`+
+`  AND (:end_dt   IS NULL OR q.pxcreatedatetime <= TO_TIMESTAMP(:end_dt,   'YYYY-MM-DD HH24:MI:SS'))\n`+
+`ORDER BY q.pxcreatedatetime DESC\n`+
+`FETCH FIRST 500 ROWS ONLY`;
+      qsSql.value = tmpl;
+    }
+
+    function renderTable(columns, rows){
+      // Clear
+      qsHead.innerHTML = '';
+      qsBody.innerHTML = '';
+      if (!rows || !rows.length){
+        qsCount.style.display = 'inline-block';
+        qsCount.textContent = '0 rows';
+        return;
+      }
+      const th = document.createElement('tr');
+      columns.forEach(c => {
+        const thd = document.createElement('th');
+        thd.textContent = String(c);
+        th.appendChild(thd);
+      });
+      qsHead.appendChild(th);
+      const cartIdx = (() => { const i = columns.findIndex(c => String(c).toLowerCase() === 'cartid'); return i >= 0 ? i : -1; })();
+      rows.forEach((r, rowIdx) => {
+        const tr = document.createElement('tr');
+        if (Array.isArray(r)){
+          r.forEach((v, colIdx) => {
+            const td = document.createElement('td');
+            const text = v===null || v===undefined || String(v).trim()==='' ? 'NULL' : String(v);
+            if (cartIdx === colIdx && text !== 'NULL'){
+              const a = document.createElement('a');
+              a.href = '#';
+              a.textContent = text;
+              a.addEventListener('click', (e) => { e.preventDefault(); openCartDetails(text); });
+              td.appendChild(a);
+            } else {
+              td.textContent = text;
+            }
+            tr.appendChild(td);
+          });
+        } else {
+          columns.forEach(c => {
+            const td = document.createElement('td');
+            const v = r && (r[c] ?? r[c.toUpperCase()] ?? r[c.toLowerCase()]);
+            const text = v===null || v===undefined || String(v).trim()==='' ? 'NULL' : String(v);
+            if (String(c).toLowerCase() === 'cartid' && text !== 'NULL'){
+              const a = document.createElement('a');
+              a.href = '#';
+              a.textContent = text;
+              a.addEventListener('click', (e) => { e.preventDefault(); openCartDetails(text); });
+              td.appendChild(a);
+            } else {
+              td.textContent = text;
+            }
+            tr.appendChild(td);
+          });
+        }
+        qsBody.appendChild(tr);
+      });
+      qsCount.style.display = 'inline-block';
+      qsCount.textContent = `${rows.length} row${rows.length===1?'':'s'}`;
+    }
+
+    function toCsv(columns, rows){
+      const esc = (s) => {
+        const t = String(s ?? '');
+        if (/[",\n\r]/.test(t)) return '"' + t.replace(/"/g, '""') + '"';
+        return t;
+      };
+      const head = columns.map(esc).join(',');
+      const body = rows.map(r => Array.isArray(r)
+        ? r.map(esc).join(',')
+        : columns.map(c => esc(r && (r[c] ?? r[c.toUpperCase()] ?? r[c.toLowerCase()]))).join(',')
+      ).join('\n');
+      return head + '\n' + body + '\n';
+    }
+
+    async function runSnapshot(){
+      const sql = (qsSql.value || '').trim();
+      if (!sql.toUpperCase().startsWith('SELECT')){ alert('Only SELECT queries are allowed.'); return; }
+      qsBusy.style.display = 'inline-block';
+      qsRun.disabled = true;
+      // Disable status select while running to avoid changes mid-flight
+      qsStatus.disabled = true;
+      try {
+        const params = {
+          queue: (qsQueue.value || '').trim() || null,
+          status: (qsStatus.value || '').trim() || null,
+          start_dt: toSqlTimestampStr(qsStart.value) || null,
+          end_dt: toSqlTimestampStr(qsEnd.value) || null,
+        };
+        const res = await fetch(`${SERVER}/oracle/query`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params, maxRows: 2000 })
+        });
+        const txt = await res.text();
+        if (!res.ok) throw new Error(txt);
+        const data = JSON.parse(txt);
+        if (data && data.error) throw new Error(String(data.error));
+        const cols = Array.isArray(data.columns) && data.columns.length
+          ? data.columns
+          : (Array.isArray(data.rows) && data.rows[0] && !Array.isArray(data.rows[0]) ? Object.keys(data.rows[0]) : []);
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        renderTable(cols, rows);
+        // Attach export
+        qsExportCsv.onclick = () => {
+          const csv = toCsv(cols, rows);
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = 'queue_snapshot.csv'; a.click();
+          URL.revokeObjectURL(url);
+        };
+      } catch (e){
+        qsHead.innerHTML = '';
+        qsBody.innerHTML = `<tr><td class="muted" colspan="99">Error: ${String(e.message||e).replace(/[<>]/g,'')}</td></tr>`;
+        qsCount.style.display = 'none';
+      } finally {
+        qsBusy.style.display = 'none';
+        qsRun.disabled = false;
+        qsStatus.disabled = false;
+      }
+    }
+
+    async function openCartDetails(cartId){
+      const sql = `SELECT 
+        sub.caseid AS OrderSubmitCaseId,
+        conf.caseid  AS OrderConfirmationCaseId,
+        line.caseid AS LineCaseId,
+        sub.cartid,
+        sub.PXCREATEDATETIME AS OS_PXCREATEDATETIME,
+        conf.PXCREATEDATETIME AS OC_PXCREATEDATETIME,
+        line.PXCREATEDATETIME AS Line_PXCREATEDATETIME,
+        line.PXUPDATEDATETIME AS line_PXUPDATEDATETIME,
+        sub.WORKOBJECTSTATUS as OrderSubmit_WORKOBJECTSTATUS,
+        conf.WORKOBJECTSTATUS as OrderConfirmation_WORKOBJECTSTATUS,
+        line.WORKOBJECTSTATUS as line_WORKOBJECTSTATUS,
+        conf.ordernumber,
+        conf.locationcode,
+        line.mtn,
+        sub.ORDERACTIVITYTYPE,
+        sub.BIOCATCH_OR,
+        sub.ASSIGNMTN_OR,
+        sub.GENERATEINSTALLMENTSCONTRACTS_OR,
+        sub.PROMOJOURNEYINITATION_OR,
+        sub.REVERSEJOURNEYINITATION_OR,
+        sub.CARTSTATUS_OR,
+        sub.PREORDERWRITE_OR,
+        conf.SAVESDDDETAILS_OR,
+        conf.MONTANASOIUPDATE_OR,
+        conf.MONTANABILLREFID_OR,
+        conf.MONTANACOMPETITOR_OR,
+        conf.MODIFYCREDIT_OR,
+        conf.SAVEOFFER_OR,
+        conf.COMMITOFFER_OR,
+        conf.SECUREPAY_OR,
+        conf.FRAUDSUBMISSIONTIMESTAMP_OR,
+        conf.CHARGESTATUS_OR,
+        conf.TRADEACCOUNTCHARGE_OR,
+        conf.TRADEGIFTCARD_OR,
+        conf.TRADECREDITSTATUS_OR,
+        conf.CANCELORDER_OR,
+        conf.VOIDSAPITEMS_OR,
+        conf.VOIDPAYMENT_OR,
+        conf.CANCELEMAIL_OR,
+        conf.SUBMITPAYMENT_OR,
+        conf.SUBMITBAPAYMENT_OR,
+        conf.CTOC_OR,
+        line.CANCELORDER_OR,
+        line.VOIDSAPITEMS_OR,
+        line.VOIDPAYMENT_OR,
+        line.SERVICEONLYACTIVAITION_OR,
+        line.INVENTORYAVAILABLE_OR,
+        line.CHARGESTATUS_OR,
+        line.CLOSELOAN_OR,
+        line.CREATELOAN_OR,
+        line.CANCELLOAN_OR,
+        line.RDB_OR,
+        line.GOAI_OR,
+        line.VOT_OR,
+        line.PERSPAIR_OR,
+        line.EXTENDRESERVATION_OR,
+        line.APPLEPARKORDER_OR,
+        line.APPLECARE_OR,
+        line.EQUIPMENTWARRANTYENTRY_OR,
+        line.SHIPPINGRECEIPT_OR,
+        line.SHIPMENTCONFIRMATIONEMAIL_OR,
+        line.ACTIVATIONSTATUS_OR,
+        CASE 
+            WHEN conf.ordernumber IS NOT NULL THEN 'Confirmed'
+            ELSE 'Submitted'
+        END AS order_status
+      FROM POJO_data.vzcm_data_ordersubmitentity sub
+      LEFT JOIN POJO_data.vzcm_data_orderconfirmationentity conf 
+        ON sub.cartid = conf.cartid
+      LEFT JOIN POJO_data.vzcm_data_lineentity line 
+        ON sub.cartid = line.cartid and conf.ordernumber=line.ordernumber and conf.locationcode=line.locationcode
+      where sub.cartid=:cartid`;
+      const body = document.getElementById('cartDetailsBody');
+      const hdr = document.getElementById('cartDetailsCartId');
+      if (hdr) hdr.textContent = String(cartId);
+      if (body) body.innerHTML = '<span class="muted">Loading…</span>';
+      detailsModal.style.display = 'block';
+      try {
+        const res = await fetch(`${SERVER}/oracle/query`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params: { cartid: cartId }, maxRows: 500 })
+        });
+        const txt = await res.text();
+        if (!res.ok) throw new Error(txt);
+        const data = JSON.parse(txt);
+        const cols = Array.isArray(data.columns) ? data.columns : [];
+        const rows = Array.isArray(data.rows) ? data.rows : [];
+        if (!cols.length || !rows.length){ body.innerHTML = '<div class="muted">No details found.</div>'; return; }
+        const table = document.createElement('table');
+        table.style.cssText = 'width:100%; border-collapse:collapse; font-size:13px;';
+        const thead = document.createElement('thead');
+        const trh = document.createElement('tr');
+        cols.forEach(c => { const th = document.createElement('th'); th.textContent = c; th.style.cssText='text-align:left; padding:6px; border-bottom:1px solid #eee;'; trh.appendChild(th);});
+        thead.appendChild(trh);
+        const tbody = document.createElement('tbody');
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          r.forEach(v => { const td = document.createElement('td'); td.textContent = v===null || v===undefined || String(v)==='' ? 'NULL' : String(v); td.style.cssText='padding:6px; border-bottom:1px solid #f3f3f3;'; tr.appendChild(td); });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(thead); table.appendChild(tbody);
+        body.innerHTML = '';
+        body.appendChild(table);
+      } catch (e){
+        body.innerHTML = `<div style="color:#b00020">Error: ${String(e.message||e).replace(/[<>]/g,'')}</div>`;
+      }
+    }
+
+    // Wire events
+    qsQuickRange.addEventListener('change', () => applyQuickRange(qsQuickRange.value));
+    qsRun.addEventListener('click', runSnapshot);
+
+    // Init defaults
+    applyQuickRange('24h');
+    setDefaultSql();
+  </script>
+</body>
+</html>

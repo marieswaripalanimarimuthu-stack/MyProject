@@ -1,0 +1,11 @@
+Api Name,WorkObjectStatus,Auxiliary Name
+Case Created,Open,N/A
+BioCatch,Pending-BioCatch,BIOCATCH_OR
+AssignMTN,Pending-MtnAssignment,ASSIGNMTN_OR
+PreOrderWrite,Pending-FetchOrderDetails,PREORDERWRITE_OR
+GenerateInstallments,Pending-LoanContractGeneration,GENERATEINSTALLMENTSCONTRACTS_OR
+Handed over to Order Case,Pending-OrderCaseProcessing,
+SubmitPayment,Pending-ChargePayment,SUBMITPAYMENT_OR
+RetrieveOrderPromo,Pending-FetchPromoDetails,PROMOJOURNEYINITATION_OR
+CreateChildOrder,Pending-CreateReturnOrder,REVERSEJOURNEYINITATION_OR
+UpdateCartStatus,Pending-CartStatusUpdate,CARTSTATUS_OR

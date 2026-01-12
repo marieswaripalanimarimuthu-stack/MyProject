@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jira Agent</title>
+  <style>
+    body { font-family: Segoe UI, Tahoma, Arial, sans-serif; margin: 24px; background: #f7f7f9; }
+    h1 { font-size: 20px; margin-bottom: 12px; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; width: 100%; max-width: none; box-sizing: border-box; }
+    html, body { height: 100%; }
+    /* Make card fill viewport height minus margins */
+    .card { min-height: calc(100vh - 48px); }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+    label { display: block; font-size: 14px; color: #1a3b7a; margin-bottom: 4px; }
+    input, select, button { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+    /* Do not force checkboxes to full width; keep natural size */
+    input[type="checkbox"] { width: auto; }
+    #cjcmOptions input[type="checkbox"] { width: auto; }
+    /* Make the Page Size field compact */
+    #pageSize { width: 100px; }
+    button { cursor: pointer; background: #0078d4; color: #fff; border: none; }
+    button.secondary { background: #666; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    pre { background: #111; color: #e6e6e6; padding: 12px; border-radius: 6px; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: 13px; }
+    /* Light borders for Status and Priority columns */
+    thead th:nth-child(3), thead th:nth-child(4),
+    tbody td:nth-child(3), tbody td:nth-child(4) { border-left: 1px solid #eee; border-right: 1px solid #eee; }
+    .muted { color: #666; }
+    /* Better layout for checkbox groups */
+    .check-group, .checkGroup {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: flex-start;
+      border: 1px solid #eee;
+      padding: 8px;
+      border-radius: 6px;
+      background: #fff;
+    }
+    .check-group label, .checkGroup label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 2px 0;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+    .check-group input[type="checkbox"], .checkGroup input[type="checkbox"] { margin: 0; }
+    /* Small spinner */
+    .spinner { display: none; width: 16px; height: 16px; border: 2px solid #bcd0ff; border-top-color: #1a3b7a; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-left: 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Reduce Issue Key input size */
+    #issueKey { max-width: 320px; width: 100%; }
+    /* Close (X) icon button for modals */
+    .closeIcon { position:absolute; top:8px; right:8px; width:28px; height:28px; border:none; border-radius:14px; background:transparent; color:#666; font-size:18px; line-height:28px; text-align:center; cursor:pointer; }
+    .closeIcon:hover { background:#eee; color:#333; }
+    /* Align Confluence results container consistently */
+    #confResults { box-sizing: border-box; margin-top: 6px; padding: 8px; }
+    #confPreview { box-sizing: border-box; margin-top: 8px; padding: 8px; }
+    /* Scrollable RCA result */
+    #rcaResult { max-height: 220px; overflow: auto; }
+    /* Token highlight */
+    mark.token { background: #fff3bf; color: #333; padding: 0 2px; border-radius: 3px; }
+    /* (Removed) calendar styles were for Release Plan UI */
+  </style>
+</head>
+<body>
+  <h1>Jira Agent</h1>
+  <div class="card">
+    <div id="queryBanner" style="background:#f0f4ff;border:1px solid #bcd0ff;padding:8px 12px;margin-bottom:12px;font-size:13px;color:#1a3b7a;display:none"></div>
+    <div class="grid">
+      <div>
+        <label>Project (key or name)</label>
+        <select id="projectSel">
+          <option value="">(select a project)</option>
+          <option>B6VV_CXP Operations</option>
+          <option>VCG_Production Defects</option>
+          <option>CXT - Defect Tracker</option>
+          <option>NorthStar Architecture Defect Tracker</option>
+          <option value="__custom__">(Custom...)</option>
+        </select>
+        <input id="projectCustom" placeholder="Custom project key or name" style="margin-top:6px; display:none;" />
+      </div>
+      <!-- Removed: per request, component/work owner inputs are now inside the modal only -->
+      <div>
+        <label>Assigned</label>
+        <select id="assigned">
+          <option value="">(any)</option>
+          <option value="me">me</option>
+          <option value="Unassigned">Unassigned</option>
+          <option value="CJCM">CJCM</option>
+          <option value="__custom__">Custom user...</option>
+        </select>
+        <input id="assignedCustom" placeholder="Enter Jira user id (e.g., CHINTGO)" style="margin-top:6px; display:none;" />
+        <div id="cjcmPanel" style="display:none; margin-top:8px;">
+          <div id="cjcmDropdown" style="position:relative;">
+            <div id="cjcmMenu" style="display:none; position:absolute; left:0; z-index:10; background:#fff; border:1px solid #ccc; border-radius:6px; padding:8px; min-width:260px; box-shadow:0 4px 12px rgba(0,0,0,0.15); text-align:left;">
+              <div id="cjcmOptionsContainer" style="display:flex; gap:8px; align-items:flex-start;">
+                <div id="cjcmOptions" style="max-height:220px; overflow:auto;"></div>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                  <button id="cjcmAdd" class="secondary" style="width:auto;">Add</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="cjcmSummary" class="muted" style="font-size:12px; margin-top:6px;"></div>
+        </div>
+      </div>
+      
+      <div>
+        <label>Status</label>
+        <div id="statusGroup" class="check-group"></div>
+      </div>
+      <div>
+        <label>Priority</label>
+        <div id="priorityGroup" class="check-group"></div>
+      </div>
+      <div>
+        <label>Issue Type</label>
+        <select id="type">
+          <option value="">All</option>
+          <option>Bug</option>
+          <option>Task</option>
+          <option>Story</option>
+          <option>Epic</option>
+          <option>Sub-task</option>
+        </select>
+      </div>
+      <div>
+        <label>Page Size</label>
+        <select id="pageSize">
+          <option>10</option>
+          <option selected>25</option>
+          <option>50</option>
+        </select>
+      </div>
+      
+    </div>
+    <div class="row">
+      <button id="fetchIssues">Fetch Issues</button>
+      <span id="fetchIssuesLoader" class="spinner"></span>
+      <button id="countIssues">Count Only</button>
+      <span id="countIssuesLoader" class="spinner"></span>
+      <button id="toggleCommentSection">Show latest comment with attachment</button>
+      <button id="vcgMilestonesBtn" class="secondary" title="Show 2026 VCG Deployment Milestones">VCG Milestones (2026)</button>
+      <span id="vcgMilestonesLoader" class="spinner" style="display:none;"></span>
+    </div>
+
+    <div id="commentSection" style="display:none; margin-top:12px;">
+      <div class="row" style="align-items:end; gap:12px;">
+        <div>
+          <label>Issue Key (latest comment)</label>
+          <input id="issueKey" placeholder="Defect No" />
+        </div>
+        <div style="display:inline-flex; align-items:center; gap:8px;">
+          <button id="fetchComment" class="secondary">Fetch Latest Comment</button>
+          <span id="fetchCommentLoader" class="spinner"></span>
+        </div>
+        <div style="display:inline-flex; align-items:center; gap:8px;">
+          <button id="fetchAttachments" class="secondary">List Attachments</button>
+          <span id="fetchAttachmentsLoader" class="spinner"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="summary" class="muted" style="margin-top:12px;"></div>
+    <div id="pagerTop" class="row" style="margin:8px 0;">
+      <button id="prevPage" class="secondary" style="display:none;">Prev</button>
+      <button id="nextPage" class="secondary" style="display:none;">Next</button>
+    </div>
+    <!-- Release Plan UI removed per request -->
+    <div id="results"></div>
+  </div>
+
+  <script>
+    const SERVER = 'http://127.0.0.1:8765';
+    // Map known project names to their Jira keys
+    const PROJECT_NAME_TO_KEY = {
+      'B6VV_CXP Operations': 'CXPOPER',
+      'VCG_Production Defects': '',
+      'CXT - Defect Tracker': '',
+      'NorthStar Architecture Defect Tracker': ''
+    };
+
+    // Fetch projects list and auto-fill mappings for common picks
+    (async function initProjectsMap(){
+      try {
+        const res = await fetch(`${SERVER}/jira/projects`);
+        const text = await res.text();
+        if (!res.ok) throw new Error(text);
+        const data = JSON.parse(text);
+        const list = Array.isArray(data.projects) ? data.projects : [];
+        const byName = new Map(list.map(p => [String(p.name || '').trim(), String(p.key || '').trim()]));
+        // Known names we show in the dropdown → fill keys if present
+        [['VCG_Production Defects','PRODDEF'], ['CXT - Defect Tracker','CXTDT'], ['NorthStar Architecture Defect Tracker','NSADT']]
+          .forEach(([name, fallbackKey]) => {
+            const k = byName.get(name) || fallbackKey;
+            if (k) PROJECT_NAME_TO_KEY[name] = k;
+          });
+        // If a known name is currently selected and we learned its key, reflect into modal project key for convenience
+        const sel = document.getElementById('projectSel');
+        const currentName = sel ? sel.value : '';
+        if (currentName && PROJECT_NAME_TO_KEY[currentName]) {
+          const mpkSel = document.getElementById('modalProjectKeySel');
+          if (mpkSel) mpkSel.value = currentName;
+        }
+      } catch (e) {
+        console.warn('Projects map init failed:', e.message);
+      }
+    })();
+
+    let pagination = { startAt: 0 };
+    let fromPager = false;
+
+    function qs(params) {
+      const usp = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') usp.append(k, String(v));
+      });
+      return usp.toString();
+    }
+
+    async function call(path, params) {
+      const url = `${SERVER}${path}?${qs(params)}`;
+      const res = await fetch(url);
+      const text = await res.text();
+      if (!res.ok) {
+        let detail = '';
+        try { const j = JSON.parse(text); detail = j.error || text; } catch { detail = text; }
+        throw new Error(`HTTP ${res.status}: ${detail}`);
+      }
+      try { return JSON.parse(text); } catch { throw new Error('Invalid JSON from server'); }
+    }
+
+    function updatePager(total, pageSize, startAt) {
+      const prevBtn = document.getElementById('prevPage');
+      const nextBtn = document.getElementById('nextPage');
+      if (!prevBtn || !nextBtn) return;
+      const showPager = total > pageSize;
+      // Hide Prev on first page; show when startAt > 0
+      prevBtn.style.display = (showPager && startAt > 0) ? 'inline-block' : 'none';
+      // Hide Next when we are at or beyond the last page
+      const atLastPage = (startAt + pageSize) >= total;
+      nextBtn.style.display = (showPager && !atLastPage) ? 'inline-block' : 'none';
+    }
+
+    // Explicitly show/hide pager controls when not listing issues
+    function setPagerVisible(visible){
+      const prevBtn = document.getElementById('prevPage');
+      const nextBtn = document.getElementById('nextPage');
+      if (!prevBtn || !nextBtn) return;
+      prevBtn.style.display = visible ? 'inline-block' : 'none';
+      nextBtn.style.display = visible ? 'inline-block' : 'none';
+    }
+
+    function getProjectValue() {
+      const sel = document.getElementById('projectSel');
+      const v = sel.value.trim();
+      if (v === '__custom__') {
+        const custom = document.getElementById('projectCustom').value.trim();
+        return custom;
+      }
+      // If a known name is selected, return its mapped key when available
+      if (PROJECT_NAME_TO_KEY.hasOwnProperty(v) && PROJECT_NAME_TO_KEY[v]) {
+        return PROJECT_NAME_TO_KEY[v];
+      }
+      return v;
+    }
+
+    // Toggle custom project input visibility
+    document.getElementById('projectSel').addEventListener('change', () => {
+      const sel = document.getElementById('projectSel');
+      const customEl = document.getElementById('projectCustom');
+      customEl.style.display = sel.value === '__custom__' ? 'block' : 'none';
+      // If a known project name was selected, update modal project key dropdown immediately
+      const mappedName = sel.value;
+      const mpkSel = document.getElementById('modalProjectKeySel');
+      if (mpkSel && mappedName) mpkSel.value = mappedName;
+      // Load components for selected project key if available
+      loadComponentsForProject();
+    });
+    document.getElementById('projectCustom').addEventListener('change', loadComponentsForProject);
+
+    function getAssignedValue() {
+      const sel = document.getElementById('assigned');
+      const v = sel.value.trim();
+      if (v === '__custom__') {
+        const custom = document.getElementById('assignedCustom').value.trim();
+        // Encode as JSON-wrapped single user to preserve commas inside names
+        return custom ? `__oneuserjson__:${JSON.stringify(custom)}` : '';
+      }
+      if (v === 'CJCM') {
+        const arr = Array.isArray(window.cjcmSelected) ? window.cjcmSelected.filter(Boolean) : [];
+        // Encode as JSON so names with commas are preserved
+        return arr.length ? `__cjcmjson__:${JSON.stringify(arr)}` : 'CJCM';
+      }
+      // If dropdown shows (any) but we have CJCM selections persisted, use them
+      if (v === '' && Array.isArray(window.cjcmSelected) && window.cjcmSelected.length) {
+        const arr = window.cjcmSelected.filter(Boolean);
+        return arr.length ? `__cjcmjson__:${JSON.stringify(arr)}` : '';
+      }
+      return v;
+    }
+
+
+    // Toggle custom assigned input visibility
+    document.getElementById('assigned').addEventListener('change', () => {
+      const sel = document.getElementById('assigned');
+      const customEl = document.getElementById('assignedCustom');
+      const isCustom = sel.value === '__custom__';
+      customEl.style.display = isCustom ? 'block' : 'none';
+      if (isCustom) { customEl.value = ''; }
+      // Show CJCM checkbox dropdown when CJCM is selected
+      const cjcmPanel = document.getElementById('cjcmPanel');
+      const isCJCM = sel.value === 'CJCM';
+      if (cjcmPanel) cjcmPanel.style.display = isCJCM ? 'block' : 'none';
+      const cjcmMenu = document.getElementById('cjcmMenu');
+      if (cjcmMenu) cjcmMenu.style.display = isCJCM ? 'block' : 'none';
+      if (isCJCM) loadCJCMOptions();
+    });
+
+    // CJCM dropdown interactions
+    // Removed cjcmToggle; menu visibility handled by Assigned change
+    // Auto-apply CJCM selections on checkbox change
+    document.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t && t.matches('#cjcmOptions input[type="checkbox"]')) {
+        const checked = Array.from(document.querySelectorAll('#cjcmOptions input[type="checkbox"]:checked')).map(cb => cb.value);
+        window.cjcmSelected = checked;
+        const sum = document.getElementById('cjcmSummary');
+        if (sum) sum.textContent = checked.length ? `Selected: ${checked.join(', ')}` : 'No CJCM values selected';
+      }
+    });
+    // Add selected CJCM values to the global list and hide the menu
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.id === 'cjcmAdd') {
+        e.preventDefault();
+        const checked = Array.from(document.querySelectorAll('#cjcmOptions input[type="checkbox"]:checked')).map(cb => cb.value);
+        const existing = Array.isArray(window.cjcmSelected) ? window.cjcmSelected.slice() : [];
+        const merged = Array.from(new Set([...existing, ...checked]));
+        window.cjcmSelected = merged;
+        const sum = document.getElementById('cjcmSummary');
+        if (sum) sum.textContent = merged.length ? `Selected: ${merged.join(', ')}` : 'No CJCM values selected';
+        const menu = document.getElementById('cjcmMenu');
+        if (menu) menu.style.display = 'none';
+        // Reset Assigned dropdown back to (any) and hide CJCM panel
+        const assignedSel = document.getElementById('assigned');
+        if (assignedSel) assignedSel.value = '';
+        const cjcmPanel = document.getElementById('cjcmPanel');
+        if (cjcmPanel) cjcmPanel.style.display = 'none';
+      }
+    });
+
+    function loadCJCMOptions(){
+      const box = document.getElementById('cjcmOptions');
+      if (!box) return;
+      // Always load static values and refresh when CJCM is selected
+      const values = ['Narayanan, Dhanushkumar','Pulaparthi, Naga Durga','Palli, Uday Kumar','Jitendra, B','Miriyala, Vihari','V, Anithashree','Kk, Jyothi Krishna','Palanimarimuthu, Marieswari','Sivakumaran, Suryaa'];
+      box.innerHTML = values.map(v => `<label style="display:flex;align-items:center;gap:8px;margin:4px 0;"><input type="checkbox" value="${v}"/>${v}</label>`).join('');
+      const sum = document.getElementById('cjcmSummary');
+      if (sum) sum.textContent = (Array.isArray(window.cjcmSelected) && window.cjcmSelected.length)
+        ? `Selected: ${window.cjcmSelected.join(', ')}`
+        : 'No CJCM values selected';
+    }
+
+    // Editable option lists; modify these arrays to change values
+    const STATUS_OPTIONS = [
+      'All','Open','To Do','In Progress','In Review','Ready for Test','Resolved','Closed','Done'
+    ];
+    const PRIORITY_OPTIONS = [
+      'Highest','High','Medium','Low','Lowest'
+    ];
+
+    function renderCheckboxGroup(containerId, options, name) {
+      const container = document.getElementById(containerId);
+      if (!container) {
+        const msg = `Missing container: ${containerId}`;
+        console.error(msg);
+        const results = document.getElementById('results');
+        if (results) results.innerHTML = `<p style="color:#b00020">${msg}</p>`;
+        return;
+      }
+      if (!options || !options.length) {
+        container.innerHTML = '<span class="muted">No options configured</span>';
+        return;
+      }
+      const items = options.map(opt => {
+        const id = `${name}_${opt.replace(/\s+/g,'_')}`;
+        return `<label><input type="checkbox" id="${id}" name="${name}" value="${opt}"/>${opt}</label>`;
+      }).join('');
+      const otherId = `${name}_other_input`;
+      const other = `<div style="display:flex;gap:8px;align-items:center;"><label><input type="checkbox" id="${name}_OtherChk" data-other-for="${otherId}"/>Other</label><input id="${otherId}" placeholder="Enter custom ${name}" style="flex:1;min-width:160px;" /></div>`;
+      container.innerHTML = items + other;
+    }
+
+    function getCheckedCSV(name) {
+      const boxes = Array.from(document.querySelectorAll(`input[name="${name}"]`));
+      const vals = boxes.filter(b => b.checked).map(b => b.value);
+      if (name === 'status') {
+        const allChk = document.getElementById('status_All');
+        if (allChk && allChk.checked) {
+          return '';
+        }
+      }
+      // Include custom 'Other' value if checkbox checked and input has text
+      const otherInputId = `${name}_other_input`;
+      const otherInput = document.getElementById(otherInputId);
+      const otherChk = document.getElementById(`${name}_OtherChk`);
+      if (otherChk && otherChk.checked && otherInput) {
+        const custom = otherInput.value.trim();
+        if (custom) vals.push(custom);
+      }
+      return vals.join(',');
+    }
+
+    // Initialize checkbox groups on load (defined outside any click handlers)
+    function initOptionGroups() {
+      renderCheckboxGroup('statusGroup', STATUS_OPTIONS, 'status');
+      renderCheckboxGroup('priorityGroup', PRIORITY_OPTIONS, 'priority');
+      // Wire up 'All' behavior for Status group
+      const allChk = document.getElementById('status_All');
+      const statusBoxes = Array.from(document.querySelectorAll('input[name="status"]')).filter(el => el !== allChk);
+      if (allChk) {
+        allChk.addEventListener('change', () => {
+          if (allChk.checked) {
+            statusBoxes.forEach(b => { b.checked = false; });
+          }
+        });
+      }
+      statusBoxes.forEach(b => b.addEventListener('change', () => {
+        const a = document.getElementById('status_All');
+        if (a) a.checked = false;
+      }));
+    }
+    // Initialize immediately and also on DOMContentLoaded to be safe
+    initOptionGroups();
+    window.addEventListener('DOMContentLoaded', initOptionGroups);
+
+    function renderIssues(data) {
+      window.lastIssuesData = data; // keep last dataset for local updates
+      const root = document.getElementById('results');
+      root.innerHTML = '';
+      const issues = data.issues || [];
+      const total = data.total ?? issues.length;
+      document.getElementById('summary').textContent = `Total defects: ${total}`;
+      if (!issues.length) {
+        root.innerHTML = '<p>No issues found.</p>';
+        if (openBulkBtn) openBulkBtn.style.display = 'none';
+        return;
+      }
+      root.innerHTML = `
+        <table>
+          <thead><tr><th><input type="checkbox" id="selectAllRows" /></th><th>Key</th><th>Status</th><th>Priority</th><th>Components</th><th>Fix Version/s</th><th>Work Owner VCG</th><th>Assignee</th><th>Summary</th></tr></thead>
+          <tbody>${issues.map(i => {
+            const key = i.key || '';
+            const f = i.fields || {};
+            const status = (f.status || {}).name || '-';
+            const summary = f.summary || '';
+            const priority = (f.priority || {}).name || '-';
+            let compsArr = (i.extra && i.extra.components && i.extra.components.length) ? i.extra.components.slice() : [];
+            let ownerVal = (i.extra && i.extra.workOwnerVCG) ? i.extra.workOwnerVCG : '';
+            let fixversArr = (i.extra && i.extra.fixVersions && i.extra.fixVersions.length) ? i.extra.fixVersions.slice() : [];
+            const comp = compsArr.length ? compsArr.join(', ') : '-';
+            const fixv = fixversArr.length ? fixversArr.join(', ') : '-';
+            const owner = ownerVal || '-';
+            const assignee = (i.extra && typeof i.extra.assignee === 'string' ? i.extra.assignee :
+              (i.extra && i.extra.assignee && (i.extra.assignee.displayName || i.extra.assignee.name)))
+              || (f.assignee && (f.assignee.displayName || f.assignee.name))
+              || '-';
+            return `<tr data-key="${key}"><td><input type="checkbox" class="rowSelect" data-key="${key}" /></td><td><a href="#" class="issueKeyLink" data-key="${key}">${key}</a></td><td>${status}</td><td>${priority}</td><td class="col-components">${comp}</td><td class="col-fixvers">${fixv}</td><td class="col-owner">${owner}</td><td>${assignee}</td><td>${summary}</td></tr>`;
+          }).join('')}</tbody>
+        </table>
+      `;
+      const selAll = document.getElementById('selectAllRows');
+      if (selAll) {
+        selAll.addEventListener('change', (e) => {
+          document.querySelectorAll('.rowSelect').forEach(cb => { cb.checked = selAll.checked; });
+          updateBulkButtonVisibility();
+        });
+      }
+      document.querySelectorAll('.rowSelect').forEach(cb => cb.addEventListener('change', updateBulkButtonVisibility));
+      // Clickable keys -> open details modal
+      document.querySelectorAll('.issueKeyLink').forEach(a => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const k = e.currentTarget.getAttribute('data-key');
+        if (k) openIssueDetails(k);
+      }));
+      updateBulkButtonVisibility();
+    }
+
+    function updateBulkButtonVisibility(){
+      const anySelected = Array.from(document.querySelectorAll('.rowSelect')).some(cb => cb.checked);
+      if (openBulkBtn) openBulkBtn.style.display = anySelected ? 'inline-block' : 'none';
+      const selectedCount = Array.from(document.querySelectorAll('.rowSelect')).filter(cb => cb.checked).length;
+      if (typeof viewCommentsBtn !== 'undefined' && viewCommentsBtn) {
+        viewCommentsBtn.style.display = selectedCount === 1 ? 'inline-block' : 'none';
+      }
+    }
+
+    async function loadComponentsForProject(){
+      const projectKey = getProjectValue();
+      const selectEl = document.getElementById('componentsSelect');
+      const helpEl = document.getElementById('componentsHelp');
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      if (!projectKey || projectKey.includes(' ')) {
+        if (helpEl) helpEl.textContent = 'Enter/select a valid Jira project key (e.g., CXPOPER).';
+        return;
+      }
+      try {
+        const res = await fetch(`${SERVER}/jira/project-components?projectKey=${encodeURIComponent(projectKey)}`);
+        const text = await res.text();
+        if (!res.ok) throw new Error(text);
+        const data = JSON.parse(text);
+        const comps = Array.isArray(data.components) ? data.components : data;
+        selectEl.innerHTML = comps.map(c => `<option value="${String(c.id)}">${c.name}</option>`).join('');
+        if (helpEl) helpEl.textContent = `Loaded ${comps.length} components for ${projectKey}.`;
+      } catch (e) {
+        if (helpEl) helpEl.textContent = `Failed to load components: ${e.message}`;
+      }
+    }
+
+    // Popup modal for bulk update
+    const modal = document.createElement('div');
+    modal.id = 'bulkModal';
+    modal.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000;';
+    modal.innerHTML = `
+      <div style="background:#fff; border-radius:8px; padding:16px; width: 540px; max-width:90%; margin: 10% auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); position:relative; max-height:85vh; overflow:auto;">
+        <button id="bulkCloseX" class="closeIcon" aria-label="Close">&times;</button>
+        <h3 style="margin-top:0;">Update Selected Defects</h3>
+        <div class="row" style="gap:8px; align-items:center;">
+          <label style="margin:0;">Project Key</label>
+          <select id="modalProjectKeySel" style="max-width:260px;">
+            <option value="">(select a project)</option>
+            <option>B6VV_CXP Operations</option>
+            <option>VCG_Production Defects</option>
+            <option>CXT - Defect Tracker</option>
+            <option>NorthStar Architecture Defect Tracker</option>
+          </select>
+        </div>
+        <label>Components (IDs submitted; names shown)</label>
+        <input id="modalComponentsFilter" placeholder="Type to filter components" style="margin-bottom:6px;" />
+        <select id="modalComponentsSelect" multiple size="8" style="height:150px;"></select>
+        <div class="muted" id="modalComponentsHelp" style="font-size:11px; margin-top:4px;">Select one or more components. Submits IDs to server.</div>
+        <label style="margin-top:8px;">Work Owner VCG</label>
+        <input id="modalWorkOwnerInput" placeholder="leave unchanged" style="margin-top:6px;" />
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <div id="updatePreview" class="muted" style="font-size:11px;">Update payload will appear here.</div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button id="bulkCancel" class="secondary">Cancel</button>
+            <button id="applyBulk" style="min-width:120px;">Apply</button>
+            <span id="bulkApplyLoader" class="spinner"></span>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    // X close for bulk modal
+    const bulkCloseX = document.getElementById('bulkCloseX');
+    if (bulkCloseX) bulkCloseX.addEventListener('click', () => { modal.style.display = 'none'; });
+
+    // Details modal (dynamic)
+    const detailsModal = document.createElement('div');
+    detailsModal.id = 'detailsModal';
+    detailsModal.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000;';
+    detailsModal.innerHTML = `
+      <div style="background:#fff; border-radius:8px; padding:16px; width: 640px; max-width:90%; margin: 8% auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); position:relative; max-height:85vh; overflow:auto;">
+        <div style="position:sticky; top:0; background:#fff; z-index:2; padding-bottom:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <h3 style="margin:0;">Issue Details</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#555;">
+                <input type="checkbox" id="strictSimilarChk" /> Strict mode
+              </label>
+              <button id="findSimilarBtn" class="secondary" title="Search similar across projects">Find Similar in 4 Projects</button>
+              <button id="detailsCloseX" class="closeIcon" aria-label="Close" style="position:static;">&times;</button>
+            </div>
+          </div>
+        </div>
+        <div id="detailsLoading" class="spinner" style="display:none; margin-top:8px;"></div>
+        <div id="detailsError" style="display:none; color:#b00020; margin-top:8px;"></div>
+        <div id="detailsBody" style="display:none; margin-top:8px;">
+          <div><strong>Key:</strong> <span id="detailsKey"></span></div>
+          <div><strong>Title:</strong> <span id="detailsTitle"></span></div>
+          <div><strong>Created:</strong> <span id="detailsCreated"></span></div>
+          <div style="margin-top:8px;"><strong>Description</strong></div>
+          <div id="detailsDescription" style="white-space:pre-wrap; border:1px solid #ddd; padding:8px; border-radius:4px; max-height:240px; overflow:auto;"></div>
+          <div style="margin-top:8px;"><strong>Consolidated Comments</strong></div>
+          <div id="detailsComments" style="white-space:pre-wrap; border:1px solid #ddd; padding:8px; border-radius:4px; max-height:180px; overflow:auto;"></div>
+          <div style="margin-top:8px;"><strong>All Comments</strong></div>
+          <div id="detailsCommentsList" style="border:1px solid #ddd; padding:8px; border-radius:4px; max-height:260px; overflow:auto; background:#fafafa;"></div>
+          <div style="margin-top:12px; border-top:1px solid #eee; padding-top:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong>Related Confluence</strong>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <input id="confQueryInput" placeholder="Search text..." style="max-width:240px;" />
+                <input id="confSpaceInput" placeholder="Space key (e.g., PEG1)" style="max-width:160px;" />
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#555;"><input type="checkbox" id="confStrictChk" /> Strict</label>
+                <button id="confSearchBtn" class="secondary">Search Confluence</button>
+                <span id="confSearchLoader" class="spinner" style="display:none;"></span>
+                <a href="https://oneconfluence.verizon.com/collector/pages.action?key=PEG1" target="_blank" class="secondary" style="text-decoration:none; padding:6px 10px; display:inline-block;">Open PEG1 Space</a>
+                <button id="confSummarizeBtn" class="secondary" title="Summarize related pages">Summarize</button>
+              </div>
+            </div>
+            <div id="confResults" class="muted" style="margin-top:6px; max-height:220px; overflow:auto; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fafafa;"></div>
+            <div id="confPreview" style="margin-top:8px; border:1px solid #ddd; border-radius:4px; max-height:280px; overflow:auto; padding:8px; background:#fff;"></div>
+            <div id="confActions" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+              <button id="copySummaryBtn" class="secondary">Copy Summary</button>
+              <button id="attachSummaryBtn">Attach to Jira</button>
+              <span id="attachSummaryLoader" class="spinner" style="display:none;"></span>
+            </div>
+          </div>
+
+          <div style="margin-top:12px; border-top:1px solid #eee; padding-top:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong>RCA</strong>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#555;"><input type="checkbox" id="rcaStrictChk" /> Strict</label>
+                <button id="rcaIdentifyBtn" class="secondary" title="Identify likely system">Identify System</button>
+                <button id="rcaAttachBtn" title="Attach RCA to Jira">Attach RCA</button>
+                <span id="rcaLoader" class="spinner" style="display:none;"></span>
+              </div>
+            </div>
+            <div id="rcaResult" style="margin-top:6px; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fafafa;"></div>
+          </div>
+
+          <div style="margin-top:12px; border-top:1px solid #eee; padding-top:8px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <strong>RCA Draft</strong>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <button id="rcaDraftBuildBtn" class="secondary" title="Build consolidated RCA note">Build Draft</button>
+                <button id="rcaDraftCopyBtn" class="secondary">Copy Draft</button>
+                <button id="rcaDraftAttachBtn">Attach Draft to Jira</button>
+                <span id="rcaDraftLoader" class="spinner" style="display:none;"></span>
+              </div>
+            </div>
+            <div id="rcaDraft" style="margin-top:6px; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fff; max-height:260px; overflow:auto; white-space:pre-wrap;"></div>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(detailsModal);
+
+    // VCG Milestones modal
+    const vcgModal = document.createElement('div');
+    vcgModal.id = 'vcgModal';
+    vcgModal.style.cssText = 'display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000;';
+    vcgModal.innerHTML = `
+      <div style="background:#fff; border-radius:8px; padding:16px; width: 680px; max-width:90%; margin: 10% auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); position:relative; max-height:85vh; overflow:auto;">
+        <button id="vcgCloseX" class="closeIcon" aria-label="Close">&times;</button>
+        <h3 style="margin-top:0;">2026 VCG Deployment Milestones</h3>
+        <div id="vcgBody" class="muted" style="margin-top:6px;">Click the button to load milestones.</div>
+      </div>`;
+    document.body.appendChild(vcgModal);
+    const vcgCloseX = document.getElementById('vcgCloseX');
+    if (vcgCloseX) vcgCloseX.addEventListener('click', () => { vcgModal.style.display = 'none'; });
+
+    const detailsCloseX = document.getElementById('detailsCloseX');
+    const detailsLoading = document.getElementById('detailsLoading');
+    const detailsError = document.getElementById('detailsError');
+    const detailsBody = document.getElementById('detailsBody');
+    const detailsKey = document.getElementById('detailsKey');
+    const detailsTitle = document.getElementById('detailsTitle');
+    const detailsCreated = document.getElementById('detailsCreated');
+    const detailsDescription = document.getElementById('detailsDescription');
+    const detailsComments = document.getElementById('detailsComments');
+    const confResults = document.getElementById('confResults');
+    const confPreview = document.getElementById('confPreview');
+      const rcaIdentifyBtn = document.getElementById('rcaIdentifyBtn');
+      const rcaAttachBtn = document.getElementById('rcaAttachBtn');
+      const rcaLoader = document.getElementById('rcaLoader');
+      const rcaResult = document.getElementById('rcaResult');
+      const rcaStrictChk = document.getElementById('rcaStrictChk');
+    const confQueryInput = document.getElementById('confQueryInput');
+    const confSpaceInput = document.getElementById('confSpaceInput');
+    const confSearchBtn = document.getElementById('confSearchBtn');
+    const confSearchLoader = document.getElementById('confSearchLoader');
+    const confSummarizeBtn = document.getElementById('confSummarizeBtn');
+    const confStrictChk = document.getElementById('confStrictChk');
+    const copySummaryBtn = document.getElementById('copySummaryBtn');
+    const attachSummaryBtn = document.getElementById('attachSummaryBtn');
+    const attachSummaryLoader = document.getElementById('attachSummaryLoader');
+    let lastSummaryText = '';
+    let lastSimilarIssues = [];
+    let lastConfluenceStructure = [];
+
+    if (detailsCloseX) detailsCloseX.addEventListener('click', () => { detailsModal.style.display = 'none'; });
+
+    async function openIssueDetails(key){
+      detailsModal.style.display = 'block';
+      if (detailsLoading) detailsLoading.style.display = 'inline-block';
+      if (detailsError) { detailsError.style.display = 'none'; detailsError.textContent = ''; }
+      if (detailsBody) detailsBody.style.display = 'none';
+      if (detailsKey) detailsKey.textContent = key;
+      if (confResults) confResults.innerHTML = '<span class="muted">Enter text and search Confluence.</span>';
+      if (confPreview) confPreview.innerHTML = '';
+      try {
+        const d = await call('/jira/issue-details', { key });
+        if (detailsTitle) detailsTitle.textContent = d.summary || '';
+        if (detailsCreated) detailsCreated.textContent = d.created || '';
+        if (detailsDescription) {
+          if (d && d.description && typeof d.description === 'object') {
+            try { detailsDescription.textContent = JSON.stringify(d.description); }
+            catch { detailsDescription.textContent = ''; }
+          } else {
+            detailsDescription.textContent = d.description || '';
+          }
+        }
+        if (detailsComments) detailsComments.textContent = d.consolidatedComments || '';
+        // Populate full comments list if container exists
+        const listEl = document.getElementById('detailsCommentsList');
+        if (listEl) {
+          const arr = Array.isArray(d.comments) ? d.comments : [];
+          if (!arr.length) {
+            listEl.innerHTML = '<div class="muted">No comments.</div>';
+          } else {
+            listEl.innerHTML = arr.map(c => {
+              const author = (c.author || '').toString();
+              const created = (c.created || '').toString();
+              const body = (c.body || '').toString();
+              return `<div style="border-bottom:1px solid #eee; padding:6px 0;">
+                        <div style=\"font-size:12px; color:#555;\"><strong>${escapeHtml(author)}</strong> • ${escapeHtml(created)}</div>
+                        <div style=\"white-space:pre-wrap; font-size:13px;\">${escapeHtml(body)}</div>
+                      </div>`;
+            }).join('');
+          }
+        }
+        if (detailsLoading) detailsLoading.style.display = 'none';
+        if (detailsBody) detailsBody.style.display = 'block';
+        // Seed Confluence query with issue summary
+        if (confQueryInput) confQueryInput.value = (d.summary || '').toString().slice(0, 120);
+      } catch (e) {
+        if (detailsLoading) detailsLoading.style.display = 'none';
+        if (detailsError) { detailsError.textContent = e.message || String(e); detailsError.style.display = 'block'; }
+      }
+    }
+
+    // Find similar issues across four projects based on this issue's description/comments
+    const findSimilarBtn = document.getElementById('findSimilarBtn');
+    const strictSimilarChk = document.getElementById('strictSimilarChk');
+    if (findSimilarBtn) {
+      findSimilarBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        if (!k) return;
+        // Show a temporary loading message inside details modal
+        const listEl = document.getElementById('detailsCommentsList');
+        if (detailsError) { detailsError.style.display = 'none'; detailsError.textContent = ''; }
+        if (detailsLoading) detailsLoading.style.display = 'inline-block';
+        try {
+          const d = await call('/jira/search-similar', { key: k, maxResults: 20, strict: (strictSimilarChk && strictSimilarChk.checked) ? '1' : '' });
+          // Render results under the All Comments box (reuse container below it)
+          const resultsRootId = 'similarResults';
+          let container = document.getElementById(resultsRootId);
+          if (!container) {
+            container = document.createElement('div');
+            container.id = resultsRootId;
+            container.style.marginTop = '12px';
+            container.style.borderTop = '1px solid #eee';
+            const parent = document.getElementById('detailsBody');
+            if (parent) parent.appendChild(container);
+          }
+          let issues = Array.isArray(d.issues) ? d.issues : [];
+          // Remove the selected defect from similar list if present
+          issues = issues.filter(it => (it && it.key) !== k);
+          lastSimilarIssues = issues;
+          if (!issues.length) {
+            container.innerHTML = '<div class="muted">No similar defects found.</div>';
+          } else {
+            container.innerHTML = `<div style="font-weight:600; margin-bottom:6px;">Similar Defects (${issues.length})</div>` +
+              '<div id="similarDefectsBox" style="max-height:260px; overflow:auto; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fafafa;">' +
+              issues.map(it => {
+                const key = it.key || '';
+                const f = it.fields || {};
+                const proj = (f.project && f.project.key) || '';
+                const status = (f.status && f.status.name) || '';
+                const summary = f.summary || '';
+                const created = f.created || '';
+                const updated = f.updated || '';
+                return `<div style="border-bottom:1px solid #eee; padding:6px 0; font-size:13px;">
+                          <div><strong>${escapeHtml(key)}</strong> [${escapeHtml(proj)}] • ${escapeHtml(status)}</div>
+                          <div class="similarSummary" style="color:#444;">${escapeHtml(summary)}</div>
+                          <div style="font-size:12px; color:#666;">Created: ${escapeHtml(created)} • Updated: ${escapeHtml(updated)}</div>
+                        </div>`;
+              }).join('') +
+              '</div>';
+            // Apply token highlighting to the Similar Defects list
+            const combinedText = issues.map(it => String((it.fields||{}).summary||'')).join('\n');
+            applyTokenHighlight('similarDefectsBox', combinedText);
+          }
+        } catch (e) {
+          if (detailsError) { detailsError.textContent = e.message || String(e); detailsError.style.display = 'block'; }
+        } finally {
+          if (detailsLoading) detailsLoading.style.display = 'none';
+        }
+      });
+    }
+    
+    // Confluence search and preview
+    if (confSearchBtn) {
+      confSearchBtn.addEventListener('click', async () => {
+        const q = (confQueryInput && confQueryInput.value || '').trim();
+        const space = (confSpaceInput && confSpaceInput.value || '').trim();
+        if (!q) { if (confResults) confResults.textContent = 'Enter search text.'; return; }
+        if (confSearchLoader) confSearchLoader.style.display = 'inline-block';
+        confPreview.innerHTML = '';
+        try {
+          const data = await call('/confluence/search', { q, space, limit: 20, strict: (confStrictChk && confStrictChk.checked) ? '1' : '' });
+          const arr = Array.isArray(data.results) ? data.results : [];
+          if (!arr.length) {
+            const cqlInfo = data.cql ? `\nCQL: ${escapeHtml(data.cql)}` : '';
+            const errInfo = data.error ? `\n(${escapeHtml(data.error)})` : '';
+            confResults.innerHTML = `<span class="muted">No pages found.${cqlInfo}${errInfo}</span>`;
+            confPreview.innerHTML='';
+            return;
+          }
+          confResults.innerHTML = arr.map(r => {
+            const id = r.id || '';
+            const title = (r.title || '').toString();
+            const absLink = r.absoluteLink || '';
+            return `<div style="border-bottom:1px solid #eee; padding:6px 0; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                      <div style="flex:1 1 auto;">${escapeHtml(title)}</div>
+                      <div style="display:flex; gap:8px;">
+                        <button class="secondary" data-conf-id="${id}">Preview</button>
+                        ${absLink ? `<a href="${escapeHtml(absLink)}" target="_blank" class="secondary" style="text-decoration:none; padding:6px 10px; display:inline-block;">Open</a>` : ''}
+                      </div>
+                    </div>`;
+          }).join('');
+        } catch (e) {
+          confResults.innerHTML = `<span style="color:#b00020">Error: ${escapeHtml(e.message||String(e))}</span>`;
+          confPreview.innerHTML = '';
+        } finally {
+          if (confSearchLoader) confSearchLoader.style.display = 'none';
+        }
+      });
+      // Delegate preview clicks
+      document.addEventListener('click', async (e) => {
+        const t = e.target;
+        if (t && t.matches('[data-conf-id]')) {
+          const cid = t.getAttribute('data-conf-id');
+          if (!cid) return;
+          try {
+            const data = await call('/confluence/page', { id: cid });
+            const title = (data.title || '').toString();
+            const html = (data.html || '').toString();
+            confPreview.innerHTML = `<div style="font-weight:600; margin-bottom:6px;">${escapeHtml(title)}</div>` + html;
+          } catch (e2) {
+            confPreview.innerHTML = `<span style="color:#b00020">Error loading page: ${escapeHtml(e2.message||String(e2))}</span>`;
+          }
+        }
+      });
+    }
+
+    if (confSummarizeBtn) {
+      confSummarizeBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        const space = (confSpaceInput && confSpaceInput.value || '').trim();
+        if (!k) return;
+        confResults.innerHTML = '<span class="muted">Summarizing related Confluence pages…</span>';
+        confPreview.innerHTML = '';
+        if (confSearchLoader) confSearchLoader.style.display = 'inline-block';
+        try {
+          const data = await call('/confluence/summarize', { key: k, space, limit: 5, strict: (confStrictChk && confStrictChk.checked) ? '1' : '' });
+          const pages = Array.isArray(data.pages) ? data.pages : [];
+          const summary = (data.summary || '').toString();
+          lastSummaryText = summary;
+          const cql = (data.cql || '').toString();
+          // Keep extracted structure for RCA draft
+          lastConfluenceStructure = pages.flatMap(p => Array.isArray(p.structure) ? p.structure : []);
+          // Show summary at top and list matched pages
+          const pageList = pages.map(p => `<li><strong>${escapeHtml(p.title||'')}</strong></li>`).join('');
+          confResults.innerHTML = `<div style="margin-bottom:6px;"><strong>Summary</strong></div>
+            <div id="confSummaryBox" style="white-space:pre-wrap; border:1px solid #ddd; border-radius:4px; padding:8px; background:#fff; max-height:160px; overflow:auto;">${escapeHtml(summary)}</div>
+            <div class="muted" style="margin-top:6px;">CQL: ${escapeHtml(cql)}</div>
+            <div style="margin-top:6px;"><strong>Pages</strong>${pageList?'<ul>'+pageList+'</ul>':'<div class="muted">No pages.</div>'}</div>`;
+          // Apply token highlighting on summary
+          applyTokenHighlight('confSummaryBox', summary);
+        } catch (e) {
+          confResults.innerHTML = `<span style="color:#b00020">Error: ${escapeHtml(e.message||String(e))}</span>`;
+        } finally {
+          if (confSearchLoader) confSearchLoader.style.display = 'none';
+        }
+      });
+    }
+
+    // Release Plan UI and handlers removed
+
+    if (rcaIdentifyBtn) {
+      rcaIdentifyBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        const space = (confSpaceInput && confSpaceInput.value || '').trim();
+        if (!k) return;
+        if (rcaLoader) rcaLoader.style.display = 'inline-block';
+        rcaResult.innerHTML = '<span class="muted">Identifying system based on comments and Confluence…</span>';
+        try {
+          const data = await call('/rca/system', { key: k, space, strict: (rcaStrictChk && rcaStrictChk.checked) ? '1' : '' });
+          const system = (data.system || '').toString();
+          const conf = (data.confidence || '').toString();
+          const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+          const evHtml = evidence.length ? ('<ul>'+evidence.map(e => `<li><em>${escapeHtml(e.source)}:</em> ${escapeHtml(e.text||'')}</li>`).join('')+'</ul>') : '<div class="muted">No direct evidence extracted.</div>';
+          rcaResult.innerHTML = `<div><strong>System:</strong> ${escapeHtml(system||'(unknown)')} • <strong>Confidence:</strong> ${escapeHtml(conf||'')}</div>${evHtml}`;
+        } catch (e) {
+          rcaResult.innerHTML = `<span style="color:#b00020">Error: ${escapeHtml(e.message||String(e))}</span>`;
+        } finally {
+          if (rcaLoader) rcaLoader.style.display = 'none';
+        }
+      });
+    }
+    // Build RCA draft using summary, similar defects, and Confluence headings/bullets
+    const rcaDraft = document.getElementById('rcaDraft');
+    const rcaDraftBuildBtn = document.getElementById('rcaDraftBuildBtn');
+    const rcaDraftCopyBtn = document.getElementById('rcaDraftCopyBtn');
+    const rcaDraftAttachBtn = document.getElementById('rcaDraftAttachBtn');
+    const rcaDraftLoader = document.getElementById('rcaDraftLoader');
+
+    function buildRcaDraft() {
+      const key = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+      const lines = [];
+      lines.push(`Defect: ${key}`);
+      lines.push('');
+      lines.push('Confluence Summary:');
+      lines.push((lastSummaryText || '').trim());
+      lines.push('');
+      const headings = lastConfluenceStructure.filter(x => x && x.type === 'heading').slice(0, 10);
+      const bullets = lastConfluenceStructure.filter(x => x && x.type === 'bullet').slice(0, 10);
+      if (headings.length) {
+        lines.push('Key Headings:');
+        headings.forEach(h => lines.push(`- ${h.text}`));
+        lines.push('');
+      }
+      if (bullets.length) {
+        lines.push('Key Bullets:');
+        bullets.forEach(b => lines.push(`- ${b.text}`));
+        lines.push('');
+      }
+      if (lastSimilarIssues && lastSimilarIssues.length) {
+        lines.push('Similar Defects:');
+        lastSimilarIssues.slice(0, 6).forEach(it => {
+          const f = it.fields || {};
+          lines.push(`- ${it.key}: ${String(f.summary||'').trim()}`);
+        });
+        lines.push('');
+      }
+      return lines.join('\n');
+    }
+
+    if (rcaDraftBuildBtn) {
+      rcaDraftBuildBtn.addEventListener('click', () => {
+        const draft = buildRcaDraft();
+        if (rcaDraft) rcaDraft.textContent = draft;
+        applyTokenHighlight('rcaDraft', draft);
+      });
+    }
+    // Fallback: delegate click in case the button is re-rendered
+    document.addEventListener('click', (e) => {
+      const t = e.target;
+      if (t && t.id === 'rcaDraftBuildBtn') {
+        e.preventDefault();
+        const draft = buildRcaDraft();
+        if (rcaDraft) rcaDraft.textContent = draft;
+        applyTokenHighlight('rcaDraft', draft);
+      }
+    });
+
+    if (rcaDraftCopyBtn) {
+      rcaDraftCopyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(rcaDraft ? rcaDraft.textContent : '');
+          rcaDraftCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { rcaDraftCopyBtn.textContent = 'Copy Draft'; }, 1500);
+        } catch { alert('Copy failed.'); }
+      });
+    }
+
+    if (rcaDraftAttachBtn) {
+      rcaDraftAttachBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        if (!k) { alert('No issue key.'); return; }
+        if (rcaDraftLoader) rcaDraftLoader.style.display = 'inline-block';
+        try {
+          const res = await fetch(`${SERVER}/jira/attach-summary`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: k, summary: (rcaDraft && rcaDraft.textContent) ? rcaDraft.textContent : '' })
+          });
+          const txt = await res.text();
+          if (!res.ok) throw new Error(txt);
+          rcaDraftAttachBtn.textContent = 'Attached!';
+          setTimeout(() => { rcaDraftAttachBtn.textContent = 'Attach Draft to Jira'; }, 1500);
+        } catch (e) {
+          alert('Attach failed: ' + (e.message || String(e)));
+        } finally {
+          if (rcaDraftLoader) rcaDraftLoader.style.display = 'none';
+        }
+      });
+    }
+
+    // Token highlighting utility: highlight common error and endpoint tokens
+    function applyTokenHighlight(elementId, text) {
+      try {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        const src = String(text || el.textContent || '');
+        const tokens = Array.from(new Set(src.match(/\b([A-Za-z][A-Za-z0-9_\-]{3,})\b/g) || []))
+          .filter(t => /error|exception|fail|unable|timeout|endpoint|api|service|policy|sap|cjcm|cxp|enforce/i.test(t));
+        if (!tokens.length) return;
+        let html = escapeHtml(src);
+        tokens.forEach(tok => {
+          const re = new RegExp(`\\b${tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+          html = html.replace(re, m => `<mark class="token">${escapeHtml(m)}</mark>`);
+        });
+        el.innerHTML = html;
+      } catch {}
+    }
+
+    if (rcaAttachBtn) {
+      rcaAttachBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        if (!k) return;
+        const text = (rcaResult && rcaResult.textContent) ? rcaResult.textContent : '';
+        try {
+          const res = await fetch(`${SERVER}/jira/attach-summary`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: k, summary: text })
+          });
+          const txt = await res.text();
+          if (!res.ok) throw new Error(txt);
+          rcaAttachBtn.textContent = 'Attached!';
+          setTimeout(() => { rcaAttachBtn.textContent = 'Attach RCA'; }, 1500);
+        } catch (e) {
+          alert('Attach failed: ' + (e.message || String(e)));
+        }
+      });
+    }
+
+    if (copySummaryBtn) {
+      copySummaryBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(lastSummaryText || '');
+          copySummaryBtn.textContent = 'Copied!';
+          setTimeout(() => { copySummaryBtn.textContent = 'Copy Summary'; }, 1500);
+        } catch {
+          alert('Copy failed.');
+        }
+      });
+    }
+
+    if (attachSummaryBtn) {
+      attachSummaryBtn.addEventListener('click', async () => {
+        const k = (detailsKey && detailsKey.textContent) ? detailsKey.textContent : '';
+        const space = (confSpaceInput && confSpaceInput.value || '').trim();
+        if (!k) { alert('No issue key.'); return; }
+        if (attachSummaryLoader) attachSummaryLoader.style.display = 'inline-block';
+        try {
+          const res = await fetch(`${SERVER}/jira/attach-summary`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: k, summary: lastSummaryText || '', space })
+          });
+          const txt = await res.text();
+          if (!res.ok) throw new Error(txt);
+          attachSummaryBtn.textContent = 'Attached!';
+          setTimeout(() => { attachSummaryBtn.textContent = 'Attach to Jira'; }, 1500);
+        } catch (e) {
+          alert('Attach failed: ' + (e.message || String(e)));
+        } finally {
+          if (attachSummaryLoader) attachSummaryLoader.style.display = 'none';
+        }
+      });
+    }
+
+    // Show VCG milestones in popup
+    const vcgMilestonesBtn = document.getElementById('vcgMilestonesBtn');
+    const vcgMilestonesLoader = document.getElementById('vcgMilestonesLoader');
+    const vcgBody = document.getElementById('vcgBody');
+    if (vcgMilestonesBtn) {
+      vcgMilestonesBtn.addEventListener('click', async () => {
+        try {
+          if (vcgMilestonesLoader) vcgMilestonesLoader.style.display = 'inline-block';
+          if (vcgBody) vcgBody.innerHTML = '<span class="muted">Loading milestones…</span>';
+          // Open modal immediately with loading state
+          const m = document.getElementById('vcgModal');
+          if (m) m.style.display = 'block';
+          const res = await fetch(`${SERVER}/releaseplan/vcg-milestones-2026`);
+          const txt = await res.text();
+          if (!res.ok) throw new Error(txt);
+          const data = JSON.parse(txt);
+          const rows = Array.isArray(data.rows) ? data.rows : [];
+          if (!rows.length) {
+            if (vcgBody) vcgBody.innerHTML = '<div class="muted">No milestones found.</div>';
+            return;
+          }
+          const table = `
+            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+              <thead>
+                <tr>
+                  <th style="text-align:left; padding:6px; border-bottom:1px solid #eee;">Deployment</th>
+                  <th style="text-align:left; padding:6px; border-bottom:1px solid #eee;">Go Live Date</th>
+                  <th style="text-align:left; padding:6px; border-bottom:1px solid #eee;">Release Version</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(r => `
+                  <tr>
+                    <td style="padding:6px; border-bottom:1px solid #f0f0f0;">${escapeHtml(r.deployment||'')}</td>
+                    <td style="padding:6px; border-bottom:1px solid #f0f0f0;">${escapeHtml(r.go_live_date||'')}</td>
+                    <td style="padding:6px; border-bottom:1px solid #f0f0f0;">${escapeHtml(r.release_version||'')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>`;
+          if (vcgBody) vcgBody.innerHTML = table;
+        } catch (e) {
+          if (vcgBody) vcgBody.innerHTML = `<span style="color:#b00020">Error: ${escapeHtml(e.message||String(e))}</span>`;
+        } finally {
+          if (vcgMilestonesLoader) vcgMilestonesLoader.style.display = 'none';
+        }
+      });
+    }
+
+    // Trigger to open modal
+    const openBulkBtn = document.createElement('button');
+    openBulkBtn.textContent = 'Update Components / Owner for Selected';
+    openBulkBtn.className = 'secondary';
+    openBulkBtn.style.margin = '8px 0';
+    openBulkBtn.style.display = 'none';
+    document.getElementById('pagerTop').insertAdjacentElement('afterend', openBulkBtn);
+    // Button to view comments of single selected defect
+    const viewCommentsBtn = document.createElement('button');
+    viewCommentsBtn.textContent = 'View Comments for Selected';
+    viewCommentsBtn.className = 'secondary';
+    viewCommentsBtn.style.margin = '8px 8px';
+    viewCommentsBtn.style.display = 'none';
+    openBulkBtn.insertAdjacentElement('afterend', viewCommentsBtn);
+
+    openBulkBtn.addEventListener('click', () => {
+      const selected = Array.from(document.querySelectorAll('.rowSelect')).filter(cb => cb.checked);
+      if (!selected.length) { alert('Select at least one defect row.'); return; }
+      const workOwnerInput = document.getElementById('modalWorkOwnerInput');
+      if (workOwnerInput) workOwnerInput.value = '';
+      // Show project key in modal
+      const projKey = getProjectValue();
+      const projSel = document.getElementById('modalProjectKeySel');
+      if (projSel) {
+        // Try to select by display name; if mapping exists, use mapped key later
+        const nameToTry = Object.keys(PROJECT_NAME_TO_KEY).find(n => PROJECT_NAME_TO_KEY[n] === projKey) || '';
+        projSel.value = nameToTry || '';
+      }
+      // If project key is blank or invalid (contains spaces), derive from selected issue keys
+      try {
+        const keys = selected.map(cb => cb.getAttribute('data-key')).filter(Boolean);
+        const prefixes = Array.from(new Set(keys.map(k => String(k).split('-')[0])));
+        if (projSel && (!projSel.value) && prefixes.length === 1) {
+          // Try to auto-select matching display name if prefix maps
+          const prefix = prefixes[0];
+          const name = Object.entries(PROJECT_NAME_TO_KEY).find(([,k]) => k === prefix)?.[0] || '';
+          if (name) projSel.value = name;
+        }
+      } catch {}
+      // Always start with Work Owner textbox cleared on open
+      // Populate modal components list from current project
+      loadComponentsIntoModal().catch(()=>{});
+      modal.style.display = 'block';
+    });
+    document.getElementById('bulkCancel').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+
+    // Minimal HTML escape for rendering comment bodies safely
+    function escapeHtml(s){
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    // Update preview when typing Work Owner
+    document.getElementById('modalWorkOwnerInput').addEventListener('input', updateUpdatePreview);
+    document.getElementById('modalComponentsFilter').addEventListener('input', () => {
+      const q = (document.getElementById('modalComponentsFilter').value || '').toLowerCase();
+      const sel = document.getElementById('modalComponentsSelect');
+      Array.from(sel.options).forEach(opt => {
+        const text = (opt.textContent || '').toLowerCase();
+        opt.style.display = q ? (text.includes(q) ? '' : 'none') : '';
+      });
+    });
+    document.getElementById('modalProjectKeySel').addEventListener('change', () => {
+      // Reload modal lists when project key changes
+      loadComponentsIntoModal();
+      updateUpdatePreview();
+    });
+
+    document.getElementById('applyBulk').addEventListener('click', () => {
+      const applyBtn = document.getElementById('applyBulk');
+      const cancelBtn = document.getElementById('bulkCancel');
+      const loader = document.getElementById('bulkApplyLoader');
+      if (applyBtn) applyBtn.disabled = true;
+      if (cancelBtn) cancelBtn.disabled = true;
+      if (loader) loader.style.display = 'inline-block';
+      const selected = Array.from(document.querySelectorAll('.rowSelect'))
+        .filter(cb => cb.checked)
+        .map(cb => cb.getAttribute('data-key'))
+        .filter(Boolean);
+      console.log('[BulkUpdate] selected keys:', selected);
+      // Use components IDs from modal dropdown
+      const compsSelectEl = document.getElementById('modalComponentsSelect');
+      const compsArr = Array.from(compsSelectEl.selectedOptions).map(o => o.value).filter(Boolean);
+      const compsNames = Array.from(compsSelectEl.selectedOptions).map(o => o.textContent).filter(Boolean);
+      const ownerVal = (document.getElementById('modalWorkOwnerInput').value || '').trim();
+      console.log('[BulkUpdate] inputs:', { compsArr, ownerVal });
+      // Prefer project key typed in the modal if provided
+      const modalProjName = (document.getElementById('modalProjectKeySel').value || '').trim();
+      const mappedKey = PROJECT_NAME_TO_KEY[modalProjName] || '';
+      const projectHint = mappedKey || getProjectValue();
+      if (!projectHint || projectHint.includes(' ')) {
+        alert('Please select or enter a valid Jira project key (e.g., CXPOPER). Project names with spaces will not work for updates.');
+        return;
+      }
+      if ((!Array.isArray(compsArr) || compsArr.length === 0) && !ownerVal) {
+        alert('Select at least one component or enter a Work Owner VCG value to update.');
+        return;
+      }
+      if (window.lastIssuesData && Array.isArray(window.lastIssuesData.issues)) {
+        // Call server to persist updates per selected key
+        const tasks = selected.map(key => {
+          const body = { key, projectKey: projectHint };
+          if (Array.isArray(compsArr)) body.components = compsArr; // IDs
+          if (ownerVal) body.workOwnerVCG = ownerVal;
+          return fetch(`${SERVER}/jira/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).then(r => r.text().then(t => ({ ok: r.ok, status: r.status, text: t, key })));
+        });
+        Promise.all(tasks).then(results => {
+          const failures = results.filter(r => !r.ok);
+          if (failures.length) {
+            alert(`Failed to update ${failures.length} item(s):\n` + failures.map(f => `${f.key}: ${f.status} ${f.text}`).join('\n'));
+          }
+          // Show final payload in banner after Apply
+          const banner = document.getElementById('queryBanner');
+          const payload = { keys: selected, projectKey: projectHint, components: compsArr, workOwnerVCG: ownerVal };
+          if (banner) { banner.textContent = `Update Payload: ${JSON.stringify(payload)}`; banner.style.display = 'block'; }
+          // Optimistically update local dataset for immediate UI feedback
+          window.lastIssuesData.issues = window.lastIssuesData.issues.map(i => {
+            const k = String(i.key || '');
+            if (selected.includes(k)) {
+              i.extra = i.extra || {};
+              // Show component names in the table; fall back to IDs if names missing
+              if (Array.isArray(compsArr)) i.extra.components = (compsNames && compsNames.length ? compsNames.slice() : compsArr.slice());
+              if (ownerVal) i.extra.workOwnerVCG = ownerVal;
+            }
+            return i;
+          });
+          renderIssues(window.lastIssuesData);
+          const summaryEl2 = document.getElementById('summary');
+          if (summaryEl2) summaryEl2.textContent = `Updated ${selected.length} defect(s)`;
+          selected.forEach(k => {
+            const row = document.querySelector(`tr[data-key="${k}"]`);
+            if (row) row.style.backgroundColor = '#fffbe6';
+          });
+        }).catch(err => {
+          alert('Bulk update error: ' + err.message);
+        }).finally(() => {
+          if (loader) loader.style.display = 'none';
+          if (applyBtn) applyBtn.disabled = false;
+          if (cancelBtn) cancelBtn.disabled = false;
+          modal.style.display = 'none';
+        });
+        return; // Exit early; we handle re-render in promise chain
+      } else {
+        selected.forEach(key => {
+          const row = document.querySelector(`tr[data-key="${key}"]`);
+          if (row) {
+            if (compsArr) row.querySelector('.col-components').textContent = compsArr.join(', ');
+            if (ownerVal) row.querySelector('.col-owner').textContent = ownerVal;
+            row.style.backgroundColor = '#fffbe6';
+          }
+        });
+        const summaryEl2 = document.getElementById('summary');
+        if (summaryEl2) summaryEl2.textContent = `Updated ${selected.length} defect(s)`;
+      }
+      modal.style.display = 'none';
+    });
+
+    async function loadComponentsIntoModal(){
+      // Prefer modal project key if provided
+      const modalProjName = (document.getElementById('modalProjectKeySel') && document.getElementById('modalProjectKeySel').value || '').trim();
+      const projectKey = (PROJECT_NAME_TO_KEY[modalProjName] || '').trim() || getProjectValue();
+      const selectEl = document.getElementById('modalComponentsSelect');
+      const helpEl = document.getElementById('modalComponentsHelp');
+      if (!selectEl) return;
+      selectEl.innerHTML = '';
+      if (!projectKey || projectKey.includes(' ')) {
+        if (helpEl) helpEl.textContent = 'Enter/select a valid Jira project key (e.g., CXPOPER).';
+        return;
+      }
+      try {
+        const res = await fetch(`${SERVER}/jira/project-components?projectKey=${encodeURIComponent(projectKey)}`);
+        const text = await res.text();
+        if (!res.ok) throw new Error(text);
+        const data = JSON.parse(text);
+        const comps = Array.isArray(data.components) ? data.components : data;
+        selectEl.innerHTML = comps.map(c => `<option value="${String(c.id)}">${String(c.name || '').trim()}</option>`).join('');
+        if (helpEl) helpEl.textContent = `Loaded ${comps.length} components for ${projectKey}.`;
+      } catch (e) {
+        if (helpEl) helpEl.textContent = `Failed to load components: ${e.message}`;
+      }
+    }
+
+    // Removed dropdown options loader; Work Owner is typed in textbox
+
+    function updateUpdatePreview(){
+      const keys = Array.from(document.querySelectorAll('.rowSelect')).filter(cb => cb.checked).map(cb => cb.getAttribute('data-key')).filter(Boolean);
+      const modalProjName = (document.getElementById('modalProjectKeySel') && document.getElementById('modalProjectKeySel').value || '').trim();
+      const projectKey = (PROJECT_NAME_TO_KEY[modalProjName] || '').trim() || getProjectValue();
+      const compsSelectEl = document.getElementById('modalComponentsSelect');
+      const components = Array.from(compsSelectEl.selectedOptions).map(o => o.value).filter(Boolean);
+      const workOwnerVCG = (document.getElementById('modalWorkOwnerInput').value || '').trim();
+      const preview = { keys, projectKey, components, workOwnerVCG };
+      const payloadEl = document.getElementById('updatePreview');
+      if (payloadEl) payloadEl.textContent = `Payload: ${JSON.stringify(preview)}`;
+    }
+
+    function renderComment(data) {
+      const root = document.getElementById('results');
+      const s = document.getElementById('summary');
+      s.textContent = '';
+      const lc = data.latestComment;
+      if (!lc) { root.innerHTML = '<p>No comments found.</p>'; return; }
+      const author = (lc.author && (lc.author.displayName || lc.author.name)) || '';
+      const created = lc.created || '';
+      const bodyHtml = lc.renderedBody;
+      const body = lc.body || '';
+      const content = bodyHtml ? `<div>${bodyHtml}</div>` : `<pre>${body}</pre>`;
+      root.innerHTML = `<p><strong>${data.issue}</strong> | ${author} | ${created}</p>${content}`;
+    }
+
+    function showQueryBanner(params){
+      const parts = [];
+      if(params.project) parts.push(`project="${params.project}"`);
+      if(params.assignedTo){
+        const at = String(params.assignedTo);
+        if (at.toLowerCase()==='me') {
+          parts.push('assignee=currentUser()');
+        } else if (at.startsWith('__oneuserjson__:')) {
+          try {
+            const json = at.replace('__oneuserjson__:', '');
+            const one = JSON.parse(json);
+            const s = (one ?? '').toString();
+            parts.push(`assignee="${s}"`);
+          } catch {
+            parts.push('assignee=""');
+          }
+        } else if (at.startsWith('__cjcmjson__:')) {
+          try {
+            const json = at.replace('__cjcmjson__:', '');
+            const list = JSON.parse(json);
+            const clean = Array.isArray(list) ? list.map(s=>String(s).trim()).filter(Boolean) : [];
+            parts.push(clean.length>1 ? 'assignee IN ('+clean.map(s=>`"${s}"`).join(', ')+')' : `assignee="${clean[0]||''}"`);
+          } catch {
+            parts.push(`assignee=""`);
+          }
+        } else if (at.startsWith('__cjcm__:')) {
+          const list = at.replace('__cjcm__:', '').split(',').map(s=>s.trim()).filter(Boolean);
+          parts.push(list.length>1 ? 'assignee IN ('+list.map(s=>`"${s}"`).join(', ')+')' : `assignee="${list[0]||''}"`);
+        }
+      }
+      if(params.type) parts.push(`issuetype="${params.type}"`);
+      if(params.status){
+        const sts = String(params.status).split(',').map(s=>s.trim()).filter(Boolean);
+        parts.push(sts.length>1 ? 'status IN ('+sts.map(s=>`"${s}"`).join(', ')+')' : `status="${sts[0]}"`);
+      }
+      if(params.priority){
+        const pr = String(params.priority).split(',').map(s=>s.trim()).filter(Boolean);
+        parts.push(pr.length>1 ? 'priority IN ('+pr.map(s=>`"${s}"`).join(', ')+')' : `priority="${pr[0]}"`);
+      }
+      const jql = parts.join(' AND ') + ' ORDER BY created DESC';
+      const banner = document.getElementById('queryBanner');
+      banner.textContent = `Preview JQL: ${jql} | pageSize=${params.maxResults || '25'} | startAt=${params.startAt || 0}`;
+      banner.style.display = 'block';
+    }
+
+    document.getElementById('fetchIssues').addEventListener('click', async () => {
+      try {
+          // Clear previous results immediately
+          document.getElementById('results').innerHTML = '';
+          document.getElementById('summary').textContent = '';
+          setPagerVisible(false);
+          const cs = document.getElementById('commentSection');
+          if (cs) cs.style.display = 'none';
+          // Reset pagination only for fresh queries, not pager navigation
+          if (!fromPager) {
+            pagination.startAt = 0;
+          }
+        const projectVal = getProjectValue();
+        if (!projectVal) { alert('Project is required (key or name).'); return; }
+        const params = {
+          project: projectVal,
+          assignedTo: getAssignedValue(),
+          type: document.getElementById('type').value,
+          status: getCheckedCSV('status'),
+          priority: getCheckedCSV('priority'),
+          maxResults: document.getElementById('pageSize').value || '25',
+          startAt: pagination.startAt,
+        };
+        showQueryBanner(params);
+          document.getElementById('fetchIssuesLoader').style.display = 'inline-block';
+        const data = await call('/jira/issues', params);
+        document.getElementById('summary').textContent = 'Results: Fetch Issues';
+        renderIssues(data);
+        const total = data.total ?? (data.issues ? data.issues.length : 0);
+        updatePager(total, parseInt(document.getElementById('pageSize').value || '25', 10), pagination.startAt);
+      } catch (e) {
+        document.getElementById('results').innerHTML = `<p style="color:#b00020">Error: ${e.message}</p>`;
+      }
+        finally {
+          document.getElementById('fetchIssuesLoader').style.display = 'none';
+          fromPager = false;
+      }
+    });
+
+    document.getElementById('countIssues').addEventListener('click', async () => {
+      try {
+          // Clear previous results immediately
+          document.getElementById('results').innerHTML = '';
+          document.getElementById('summary').textContent = '';
+          setPagerVisible(false);
+          const cs = document.getElementById('commentSection');
+          if (cs) cs.style.display = 'none';
+          // Reset pagination for count-only action
+          pagination.startAt = 0;
+        const projectVal = getProjectValue();
+        if (!projectVal) { alert('Project is required (key or name).'); return; }
+        const params = {
+          project: projectVal,
+          assignedTo: getAssignedValue(),
+          type: document.getElementById('type').value,
+          status: getCheckedCSV('status'),
+          priority: getCheckedCSV('priority'),
+          maxResults: 1,
+          startAt: pagination.startAt,
+        };
+        showQueryBanner(params);
+          document.getElementById('countIssuesLoader').style.display = 'inline-block';
+        const data = await call('/jira/issues', params);
+        const total = data.total ?? (data.issues ? data.issues.length : 0);
+        document.getElementById('summary').textContent = `Count Only: Total defects = ${total}`;
+        document.getElementById('results').innerHTML = '';
+        // Do not show pager for Count Only
+        setPagerVisible(false);
+      } catch (e) {
+        document.getElementById('results').innerHTML = `<p style="color:#b00020">Error: ${e.message}</p>`;
+      }
+      finally {
+          document.getElementById('countIssuesLoader').style.display = 'none';
+      }
+    });
+    document.getElementById('prevPage').addEventListener('click', () => {
+      const size = parseInt(document.getElementById('pageSize').value || '25', 10);
+      pagination.startAt = Math.max(0, pagination.startAt - size);
+      fromPager = true;
+      document.getElementById('fetchIssues').click();
+    });
+    document.getElementById('nextPage').addEventListener('click', () => {
+      const size = parseInt(document.getElementById('pageSize').value || '25', 10);
+      pagination.startAt += size;
+      fromPager = true;
+      document.getElementById('fetchIssues').click();
+    });
+
+    document.getElementById('toggleCommentSection').addEventListener('click', () => {
+      // Clear any previous results and summary when toggling the panel
+      const resEl = document.getElementById('results');
+      const sumEl = document.getElementById('summary');
+      if (resEl) resEl.innerHTML = '';
+      if (sumEl) sumEl.textContent = '';
+      setPagerVisible(false);
+      // Reset pagination when switching modes
+      pagination.startAt = 0;
+      const sec = document.getElementById('commentSection');
+      if (sec) {
+        const visible = sec.style.display === 'block';
+        sec.style.display = visible ? 'none' : 'block';
+      }
+    });
+
+    document.getElementById('fetchComment').addEventListener('click', async () => {
+      try {
+        // Clear previous results immediately
+        document.getElementById('results').innerHTML = '';
+        document.getElementById('summary').textContent = '';
+        setPagerVisible(false);
+        const key = document.getElementById('issueKey').value.trim();
+        if (!key) { alert('Enter an issue key'); return; }
+        // Show banner for latest comment
+        const banner = document.getElementById('queryBanner');
+        if (banner) {
+          banner.textContent = `Preview: latest comment for issue ${key}`;
+          banner.style.display = 'block';
+        }
+        document.getElementById('fetchCommentLoader').style.display = 'inline-block';
+        const data = await call('/jira/latest-comment', { key });
+        document.getElementById('summary').textContent = 'Results: Latest Comment';
+        renderComment(data);
+      } catch (e) {
+        document.getElementById('results').innerHTML = `<p style="color:#b00020">Error: ${e.message}</p>`;
+      }
+      finally {
+        document.getElementById('fetchCommentLoader').style.display = 'none';
+      }
+    });
+
+    document.getElementById('fetchAttachments').addEventListener('click', async () => {
+      try {
+        // Clear previous results immediately
+        document.getElementById('results').innerHTML = '';
+        document.getElementById('summary').textContent = '';
+        setPagerVisible(false);
+        const key = document.getElementById('issueKey').value.trim();
+        if (!key) { alert('Enter an issue key'); return; }
+        // Show banner for attachments
+        const banner = document.getElementById('queryBanner');
+        if (banner) {
+          banner.textContent = `Preview: list attachments for issue ${key}`;
+          banner.style.display = 'block';
+        }
+        document.getElementById('fetchAttachmentsLoader').style.display = 'inline-block';
+        const data = await call('/jira/attachments', { key });
+        const list = (data.attachments || []).map(a => {
+          const fname = a.filename || '';
+          const content = a.content ? `<a href="${a.content}" target="_blank">download</a>` : '';
+          const thumb = a.thumbnail ? ` | <a href="${a.thumbnail}" target="_blank">thumbnail</a>` : '';
+          return `<li>${fname} (${a.mimeType || ''}, ${a.size || 0} bytes) ${content}${thumb}</li>`;
+        }).join('');
+        document.getElementById('summary').textContent = `Results: Attachments for ${data.issue}`;
+        document.getElementById('results').innerHTML = list ? `<ul>${list}</ul>` : '<p>No attachments.</p>';
+      } catch (e) {
+        document.getElementById('results').innerHTML = `<p style="color:#b00020">Error: ${e.message}</p>`;
+      }
+      finally {
+        document.getElementById('fetchAttachmentsLoader').style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
