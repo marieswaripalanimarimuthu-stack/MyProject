@@ -1,0 +1,55 @@
+Planning terminal commands
+
+It looks like the tools indicate we can't run winget check right now, so let’s try that again with a proper preamble. I should also commit the updates we made to order_validation.html. My plan is to use a todo list. First, I'll attempt Get-Command git. If it fails, I'll tell the user to install git via winget. However, running winget might not be permitted, so I need to prepare for a manual download instead.
+
+Checking for Git installation
+
+I'm going to start by checking if Git is installed. I’ll run the command Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List in the terminal. Even though the output might be truncated, I think it should still give us the information we need. Let’s see what we find after running this command!
+
+Get-Command git -ErrorAction SilentlyContinue | Select-Object -First 1 | Format-List
+
+
+winget --version
+
+
+winget install --id Git.Git -e --source winget
+Found an existing package already installed. Trying to upgrade the installed package...        
+No available upgrade found.                                                                    
+No newer package versions are available from the configured sources.                           
+Troubleshooting Git Installation
+
+git --version
+git : The term 'git' is not recognized as the name of a cmdlet, function, script file, or      
+operable program. Check the spelling of the name, or if a path was included, verify that the   
+path is correct and try again.                                                                 
+At line:1 char:1                                                                               
++ git --version                                                                                
++ ~~~                                                                                          
+    + CategoryInfo          : ObjectNotFound: (git:String) [], CommandNotFoundException        
+    + FullyQualifiedErrorId : CommandNotFoundException                                         
+Looking into Git installation
+
+$gitCmds = @("C:\Program Files\Git\cmd\git.exe","C:\Program Files\Git\bin\git.exe","C:\Users\$env:USERNAME\AppData\Local\Programs\Git\cmd\git.exe"); $found = $gitCmds | Where-Object { Test-Path $_ } | Select-Object -First 1; if ($found) { $dir = Split-Path $found -Parent; $env:PATH = $env:PATH + ";" + $dir; Write-Output "Added to PATH: $dir"; & $found --version } else { Write-Output "git.exe not found in common locations." }
+Executing git commands
+
+git status; git remote -v; git branch
+
+git commit -m "Order Validation UI: lazy status caching, Last ranges, Count/View actions with total count, SQL preview+params, CSV export, CASEID detail popup, hierarchy case detail, metrics styling"; git push origin main
+
+
+Pushing now complete. I configured Git for this session, committed, and pushed the latest changes to main.
+
+What I did
+
+Detected Git missing on PATH; located installed git.exe and added it to PATH for this session.
+Verified repo and remote: origin points to https://github.com/marieswaripalanimarimuthu-stack/MyProject.
+Committed staged changes and pushed to origin/main.
+Commit
+
+Message: Order Validation UI: lazy status caching, Last ranges, Count/View actions with total count, SQL preview+params, CSV export, CASEID detail popup, hierarchy case detail, metrics styling
+Branch: main
+Remote: origin
+Optional global config (to suppress the Git identity message next time):
+
+git config --global user.name "Palanimarimuthu"
+git config --global user.email "V776133@verizon.com"

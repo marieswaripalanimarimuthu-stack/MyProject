@@ -1,0 +1,39 @@
+SELECT COUNT(*) AS CNT FROM POJO_data.vzcm_data_ordersubmitentity sub WHERE sub.WORKOBJECTSTATUS = 'Pending-OrderCaseProcessing' AND sub.PXCREATEDATETIME >= SYSTIMESTAMP - INTERVAL '1' DAY
+
+
+
+https://gitlab.verizon.com/V776133/cjcm_ordervaldation/-/tree/github-sync?ref_type=heads
+
+https://github.com/marieswaripalanimarimuthu-stack/MyProject
+
+Working query
+---------------
+SELECT 
+    sub.cartid As CARTID, 
+    conf.ordernumber as OrderNumber,
+    conf.locationcode as LocationCode,
+    sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
+    conf.WORKOBJECTSTATUS as ORDER_WORKOBJECTSTATUS,
+    line.WORKOBJECTSTATUS as LINE_WORKOBJECTSTATUS,
+    sub.PYSTATUSWORK as CART_PYSTATUSWORK,
+    conf.PYSTATUSWORK as ORDER_PYSTATUSWORK,
+    line.PYSTATUSWORK as LINE_PYSTATUSWORK,
+    sub.caseid As CART_CASEID, 
+    conf.caseid AS Order_Caseid,
+    line.caseid As Line_Caseid,
+    line.cartid as Line_CARTID,
+    line.ordernumber as LINE_OrderNumber,
+    line.locationcode as LINE_LOCATIONCODE,
+    conf.mtn as ORDER_MTN,    
+    line.mtn as LINE_MTN,
+    sub.PXCREATEDATETIME as CART_PXCREATEDATETIME,
+    conf.PXCREATEDATETIME as ORDER_PXCREATEDATETIME,
+    line.PXCREATEDATETIME as LINE_PXCREATEDATETIME,
+    line.MON as LINE_MON,
+    sub.ACCOUNTNUMBER as CART_ACCOUNTNUMBER
+FROM POJO_data.vzcm_data_orderconfirmationentity conf
+INNER JOIN POJO_data.vzcm_data_ordersubmitentity sub 
+    ON conf.cartid = sub.cartid 
+INNER JOIN POJO_data.vzcm_data_lineentity line 
+    ON conf.cartid = line.cartid 
+WHERE conf.WORKOBJECTSTATUS = 'Pending-OrderCompletion' AND conf.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('2026-01-08T18:28', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('2026-01-08T22:26', 'YYYY-MM-DD"T"HH24:MI')

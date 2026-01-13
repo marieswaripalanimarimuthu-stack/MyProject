@@ -352,6 +352,7 @@ WHERE line.WORKOBJECTSTATUS = :status `;
       } else if (entity === 'ORDER') {
         sql = `SELECT 
     sub.cartid As CARTID, 
+    ful.TRANSACTIONTYPE,
     conf.ordernumber as OrderNumber,
     conf.locationcode as LocationCode,
     sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
@@ -384,7 +385,8 @@ WHERE conf.WORKOBJECTSTATUS = :status`;
         params['status'] = status || '';
       } else if (entity === 'CART') {
         sql = `SELECT 
-    sub.cartid As CARTID, 
+    sub.cartid As CARTID,
+    ful.TRANSACTIONTYPE, 
     conf.ordernumber as OrderNumber,
     conf.locationcode as LocationCode,
     sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
