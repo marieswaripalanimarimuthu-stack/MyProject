@@ -50,7 +50,7 @@
     .collapsed > .children { display: none; }
 
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
-    .modal { width: 100%; max-width: 420px; background: canvas; color: canvastext; border: 1px solid #0002; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.25); overflow: hidden; }
+    .modal { width: 100%; max-width: 900px; background: canvas; color: canvastext; border: 1px solid #0002; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.25); overflow: hidden; }
     .modal header { padding: 14px 16px; font-weight: 600; border-bottom: 1px solid #0002; display: flex; align-items: center; justify-content: space-between; }
     .modal .content { padding: 16px; display: grid; gap: 12px; max-height: 60vh; overflow: auto; }
     .modal footer { padding: 12px 16px; border-top: 1px solid #0002; display: flex; gap: 8px; justify-content: flex-end; }
@@ -80,9 +80,6 @@
         <button id="detailModalClose" class="ghost" type="button" title="Close">Close</button>
       </header>
       <div id="detailModalContent" class="content"></div>
-      <footer>
-        <button id="detailModalCloseFooter" class="secondary" type="button">Close</button>
-      </footer>
     </div>
   </div>
 
@@ -99,8 +96,135 @@
       LINE: 'POJO_data.vzcm_data_lineentity'
     };
 
-    // Cache WorkObjectStatus per hierarchy to avoid repeated DB calls
-    const STATUS_CACHE = { CART: null, ORDER: null, LINE: null };
+    // Static WorkObjectStatus map provided; used to seed dropdowns immediately
+    const STATIC_STATUS = {
+      CART: [
+        "Failed-AssignMTN",
+        "Failed-CCO",
+        "Failed-GenerateInstall",
+        "Failed-PreOrderWrite",
+        "Failed-SubmitPayment",
+        "Failed-UpdateCartStatus",
+        "Open",
+        "Pending-CartStatusUpdate",
+        "Pending-CreateReturnOrder",
+        "Pending-OrderCaseProcessing",
+        "Resolved-LineCompleted",
+        "Retry-CCO",
+        "Retry-PreOrderWrite",
+        "Retry-SubmitPayment"
+      ],
+      ORDER: [
+        "Failed-CartToOrder",
+        "Failed-ChargePayment",
+        "Failed-CreateCharge",
+        "Failed-CS",
+        "Failed-DPAandCustomerAgreement",
+        "Failed-FraudCheck",
+        "Failed-InsertTnC",
+        "Failed-ISPUDvcValidate",
+        "Failed-ModifyCredit",
+        "Failed-SapInventory",
+        "Failed-SaveLoan",
+        "Failed-SaveSddInfo",
+        "Failed-SP",
+        "Failed-SubmitActivation",
+        "Failed-TnCCheck",
+        "Failed-TnCCompute",
+        "Open",
+        "Pending-CommitOfferDetails",
+        "Pending-DeviceCaseProcessing",
+        "Pending-FraudCheckRequestSubmission",
+        "Pending-InventoryReservation",
+        "Pending-ISPUUpdates",
+        "Pending-LineCaseProcessing",
+        "Pending-OrderCompletion",
+        "Pending-ReadOrderSaveLoanDetails",
+        "Pending-ReadyForPickUp",
+        "Pending-ReadyForPickUpReminder1",
+        "Pending-ReadyForPickUpReminder2",
+        "Pending-ReadyForPickUpReminder3",
+        "Pending-ReceiptGeneration",
+        "Pending-RetryDPAandCustomerAgreement",
+        "Pending-SaveOfferDetails",
+        "Pending-SaveOrderDetails",
+        "Pending-SaveSDDInfo",
+        "Pending-ServiceOnlyActivationTrigger",
+        "Pending-ShipmentToLocker",
+        "Pending-SubmitBAPayment",
+        "Pending-SubmitPayment",
+        "Pending-TradeAccountCharge",
+        "Pending-TradeCreditStatusUpdate",
+        "Pending-TradeGiftCardActivation",
+        "Retry-CaptureSignature",
+        "Retry-CartToOrder",
+        "Retry-ChargePayment",
+        "Retry-FraudCheck",
+        "Retry-SapInventory",
+        "Retry-SubmitActivation",
+        "Retry-SubmitPayment",
+        "Retry-TnCCheck"
+      ],
+      LINE: [
+        "Failed-Activation",
+        "Failed-ActivationInfo",
+        "Failed-ActivationStatus",
+        "Failed-ActivationUpdate",
+        "Failed-CloseLoan",
+        "Failed-CreateLoan",
+        "Failed-ETNIPairing",
+        "Failed-PERS",
+        "Failed-RDB",
+        "Failed-Reactivation",
+        "Failed-RetrieveMtnStatus",
+        "Failed-SubmitActivation",
+        "Failed-UpdateICCID",
+        "Failed-ValidateBillingPasscode",
+        "Failed-ValidateICCID",
+        "Failed-ValidatePark",
+        "Open",
+        "Open-LineActivation",
+        "Open-PERSFail",
+        "Pending-3rdPartyLogicsticsAllocation",
+        "Pending-ActivationNotification",
+        "Pending-ActivationTrigger",
+        "Pending-ChargePayment",
+        "Pending-DCupdate",
+        "Pending-DistributionCenterAllocation",
+        "Pending-FetchSegementID",
+        "Pending-FulfilmentInitiation",
+        "Pending-IccidCreation",
+        "Pending-InitiateActivation",
+        "Pending-InventoryDeplete",
+        "Pending-IvrActivation",
+        "Pending-IVRValidation",
+        "Pending-MtnPairing",
+        "Pending-MtnPreQualification",
+        "Pending-PortInUpdates",
+        "Pending-RetryActivation",
+        "Pending-SaveICCIDDetails",
+        "Pending-ShipmentOutOfWarehouse",
+        "Pending-SIMOTACompletion",
+        "Pending-SubmitPayment",
+        "Pending-UserAuthentication",
+        "Resolved-Cancelled",
+        "Resolved-LineCompleted",
+        "Retry-Activation",
+        "Retry-ActivationOrderInfo",
+        "Retry-ActivationStatus",
+        "Retry-ActivationUpdate",
+        "Retry-CreateLoan",
+        "Retry-PERS",
+        "Retry-UpdateICCID"
+      ]
+    };
+
+    // Cache WorkObjectStatus per hierarchy to avoid repeated DB calls; seed with static lists
+    const STATUS_CACHE = {
+      CART: (STATIC_STATUS.CART || []).slice().sort((a,b)=>a.localeCompare(b)),
+      ORDER: (STATIC_STATUS.ORDER || []).slice().sort((a,b)=>a.localeCompare(b)),
+      LINE: (STATIC_STATUS.LINE || []).slice().sort((a,b)=>a.localeCompare(b))
+    };
     const STATUS_FETCH = { CART: null, ORDER: null, LINE: null };
 
     function setStatusOptions(selectEl, options) {
@@ -166,15 +290,21 @@
         return out;
       } catch { return sql || ''; }
     }
-    function updateSqlPanel(sql, params) {
+    function updateSqlPanel(sql, params, meta) {
       lastSql = sql || '';
       lastParams = params || {};
       const sqlEl = document.getElementById('sqlText');
       const paramsEl = document.getElementById('sqlParams');
       const prevEl = document.getElementById('sqlPreview');
+      const durEl = document.getElementById('sqlDuration');
       if (sqlEl) sqlEl.textContent = lastSql;
       if (paramsEl) paramsEl.textContent = JSON.stringify(lastParams, null, 2);
       if (prevEl) prevEl.textContent = previewBoundSql(lastSql, lastParams);
+      if (durEl) {
+        const ms = meta && typeof meta.durationMs === 'number' ? meta.durationMs : null;
+        const secs = ms === null ? '' : (ms / 1000).toFixed(3);
+        durEl.textContent = secs;
+      }
     }
 
     // Modal helpers
@@ -197,7 +327,6 @@
     (function initModal() {
       const backdrop = document.getElementById('detailModalBackdrop');
       document.getElementById('detailModalClose').addEventListener('click', closeModal);
-      document.getElementById('detailModalCloseFooter').addEventListener('click', closeModal);
       backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
     })();
 
@@ -253,6 +382,8 @@
           </div>
           <div class="note"><strong>SQL</strong></div>
           <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
+          <div class="note"><strong>Time taken (s)</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration"></code></pre>
           <div class="note"><strong>Parameters</strong></div>
           <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
           <div class="note"><strong>Preview with values</strong> (display only)</div>
@@ -426,7 +557,12 @@
       btnCount.addEventListener('click', async () => {
         const base = `SELECT COUNT(*) AS CNT FROM ${spec.table} ${spec.alias}`;
         const sql = spec.where ? `${base} WHERE ${spec.where}` : base;
-        updateSqlPanel(sql, spec.params);
+        // Measure execution time for Count query
+        // Auto-show SQL panel with the current query immediately
+        const show = sqlPanel.classList.contains('hidden');
+        if (show) { sqlPanel.classList.remove('hidden'); btnToggleSql.textContent = 'Hide SQL'; }
+        updateSqlPanel(sql, spec.params, {});
+        const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
         setBusy(true);
         out.innerHTML = '<div class="note">Running count...</div>';
         try {
@@ -436,6 +572,8 @@
           });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.error || 'Count failed');
+          const t1 = (window.performance && performance.now) ? performance.now() : Date.now();
+          updateSqlPanel(sql, spec.params, { durationMs: t1 - t0 });
           const idx = (data.columns || []).indexOf('CNT');
           const cnt = idx >= 0 && (data.rows || [])[0] ? (data.rows[0][idx]) : 0;
           out.innerHTML = `<div class="metric">No of records: ${cnt}</div>`;
@@ -452,27 +590,32 @@
       btnView.addEventListener('click', async () => {
         const base = `SELECT * FROM ${spec.table} ${spec.alias}`;
         const sql = spec.where ? `${base} WHERE ${spec.where}` : base;
-        updateSqlPanel(sql, spec.params);
+        // Auto-show SQL panel with the current query immediately
+        const show = sqlPanel.classList.contains('hidden');
+        if (show) { sqlPanel.classList.remove('hidden'); btnToggleSql.textContent = 'Hide SQL'; }
+        updateSqlPanel(sql, spec.params, {});
+        const tData0 = (window.performance && performance.now) ? performance.now() : Date.now();
         setBusy(true);
         out.innerHTML = '<div class="note">Loading orders...</div>';
         try {
           const countSql = `SELECT COUNT(*) AS CNT FROM ${spec.table} ${spec.alias}` + (spec.where ? ` WHERE ${spec.where}` : '');
+          // Fire both requests concurrently and measure data query duration
+          const pCount = fetch(ORACLE_ENDPOINT, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 })
+          }).then(r => r.json().then(j => ({ ok: r.ok, data: j })));
+          const pData = fetch(ORACLE_ENDPOINT, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql, params: spec.params, maxRows: getMaxRows() })
+          }).then(async r => { const j = await r.json(); return { ok: r.ok, data: j }; });
 
-          const [respCount, respData] = await Promise.all([
-            fetch(ORACLE_ENDPOINT, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 })
-            }),
-            fetch(ORACLE_ENDPOINT, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ sql, params: spec.params, maxRows: getMaxRows() })
-            })
-          ]);
-
-          const dataCount = await respCount.json();
-          const data = await respData.json();
-          if (!respData.ok) throw new Error(data.error || 'Query failed');
-          if (!respCount.ok) throw new Error(dataCount.error || 'Count failed');
+          const [dataCountRes, dataRes] = await Promise.all([pCount, pData]);
+          const dataCount = dataCountRes.data;
+          const data = dataRes.data;
+          if (!dataRes.ok) throw new Error(data.error || 'Query failed');
+          if (!dataCountRes.ok) throw new Error(dataCount.error || 'Count failed');
+          const tData1 = (window.performance && performance.now) ? performance.now() : Date.now();
+          updateSqlPanel(sql, spec.params, { durationMs: tData1 - tData0 });
 
           const idxCnt = (dataCount.columns || []).indexOf('CNT');
           const totalCnt = idxCnt >= 0 && (dataCount.rows || [])[0] ? (dataCount.rows[0][idxCnt]) : 0;
@@ -539,7 +682,7 @@ LEFT JOIN POJO_data.vzcm_data_lineentity line
 WHERE sub.cartid = :cartid
 FETCH FIRST 1 ROWS ONLY`;
           const res = await oracleQuery(sql, { cartid }, 1);
-          const html = buildVerticalListHtml(res.columns || [], res.rows || []);
+          const html = buildTableHtml(res.columns || [], res.rows || []);
           document.getElementById('detailModalContent').innerHTML = html;
         } catch (err) {
           console.error('Case detail error', err);
@@ -671,6 +814,7 @@ FETCH FIRST 1 ROWS ONLY`;
       const MAX_ROWS = 500;
       try {
         results.innerHTML = '<div class="note">Running query...</div>';
+        const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
         const resp = await fetch(ORACLE_ENDPOINT, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -678,7 +822,8 @@ FETCH FIRST 1 ROWS ONLY`;
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || 'Query failed');
-        updateSqlPanel(sql, params);
+        const t1 = (window.performance && performance.now) ? performance.now() : Date.now();
+        updateSqlPanel(sql, params, { durationMs: t1 - t0 });
         const count = (data.rows || []).length;
         const limitNote = count >= MAX_ROWS ? ` (displayed ${MAX_ROWS} max)` : '';
         results.innerHTML = `<div class="note"><strong>No of records:</strong> ${count}${limitNote}</div>`;
@@ -701,6 +846,26 @@ FETCH FIRST 1 ROWS ONLY`;
           <div class="actions">
             <button id="btnRunHierarchy" type="button">Run</button>
             <span id="hierSpinner" class="spinner hidden" aria-hidden="true"></span>
+            <button id="btnToggleSql" class="ghost" type="button">Show SQL</button>
+          </div>
+          <div id="sqlPanel" class="hidden">
+            <div class="actions" style="margin-top:8px;">
+              <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
+            </div>
+            <div class="note"><strong>SQL</strong> (CART, ORDER, LINE)</div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
+            <div class="note"><strong>Time taken (s) — Total wall time</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationTotal"></code></pre>
+            <div class="note"><strong>CART</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationCart"></code></pre>
+            <div class="note"><strong>ORDER</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationOrder"></code></pre>
+            <div class="note"><strong>LINE</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationLine"></code></pre>
+            <div class="note"><strong>Parameters</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+            <div class="note"><strong>Preview with values</strong> (display only)</div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
           </div>
           <div id="hierResults" class="tree"></div>
         </div>
@@ -711,6 +876,9 @@ FETCH FIRST 1 ROWS ONLY`;
       const btnRunHierarchy = document.getElementById('btnRunHierarchy');
       const hierSpinner = document.getElementById('hierSpinner');
       const hierResults = document.getElementById('hierResults');
+      const btnToggleSql = document.getElementById('btnToggleSql');
+      const sqlPanel = document.getElementById('sqlPanel');
+      const btnCopySql = document.getElementById('btnCopySql');
 
       // Show a helpful placeholder so the div isn't empty
       hierResults.innerHTML = '<div class="note">Enter CARTID and click Run to view hierarchy.</div>';
@@ -726,10 +894,68 @@ FETCH FIRST 1 ROWS ONLY`;
         if (!cartId) { alert('Please enter CARTID.'); return; }
         setHierLoading(true);
         try {
-          await runHierarchy(cartId, hierResults);
+          // Prepare and show SQL immediately
+          const sqlCart = `SELECT CASEID, CARTID, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_ordersubmitentity WHERE CARTID = :cartid`;
+          const sqlOrders = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid`;
+          const sqlLines = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, MTN, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid`;
+          const combinedSql = `-- CART\n${sqlCart}\n\n-- ORDER\n${sqlOrders}\n\n-- LINE\n${sqlLines}`;
+          if (sqlPanel.classList.contains('hidden')) {
+            sqlPanel.classList.remove('hidden');
+            btnToggleSql.textContent = 'Hide SQL';
+          }
+          updateSqlPanel(combinedSql, { cartid: cartId }, {});
+          // Execute queries individually to capture per-query durations
+          const params = { cartid: cartId };
+          const nowFn = (window.performance && performance.now) ? () => performance.now() : () => Date.now();
+          async function execTimed(sql) {
+            const t0 = nowFn();
+            const resp = await fetch(ORACLE_ENDPOINT, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sql, params, maxRows: 5000 })
+            });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'Query failed');
+            const t1 = nowFn();
+            return { data, ms: t1 - t0 };
+          }
+          const tWall0 = nowFn();
+          const [cartInfo, ordersInfo, linesInfo] = await Promise.all([
+            execTimed(sqlCart),
+            execTimed(sqlOrders),
+            execTimed(sqlLines)
+          ]);
+          const tWall1 = nowFn();
+          // Update per-query durations and total wall time in seconds
+          const elTotal = document.getElementById('sqlDurationTotal');
+          const elCart = document.getElementById('sqlDurationCart');
+          const elOrder = document.getElementById('sqlDurationOrder');
+          const elLine = document.getElementById('sqlDurationLine');
+          if (elTotal) elTotal.textContent = ((tWall1 - tWall0) / 1000).toFixed(3);
+          if (elCart) elCart.textContent = (cartInfo.ms / 1000).toFixed(3);
+          if (elOrder) elOrder.textContent = (ordersInfo.ms / 1000).toFixed(3);
+          if (elLine) elLine.textContent = (linesInfo.ms / 1000).toFixed(3);
+          // Render hierarchy
+          const cartRows = rowsAsObjects(cartInfo.data);
+          const orderRows = rowsAsObjects(ordersInfo.data);
+          const lineRows = rowsAsObjects(linesInfo.data);
+          const treeHtml = buildHierarchyTree(cartId, cartRows, orderRows, lineRows);
+          hierResults.innerHTML = treeHtml;
+          wireCaseLinks(hierResults);
+          wireToggles(hierResults);
         } finally {
           setHierLoading(false);
         }
+      });
+
+      btnToggleSql.addEventListener('click', () => {
+        const show = sqlPanel.classList.contains('hidden');
+        sqlPanel.classList.toggle('hidden');
+        btnToggleSql.textContent = show ? 'Hide SQL' : 'Show SQL';
+      });
+
+      btnCopySql.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
+        catch(e) { console.error('Copy failed', e); }
       });
     }
 

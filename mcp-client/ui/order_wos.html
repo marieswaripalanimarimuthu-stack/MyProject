@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CJCM Order WOS</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; padding: 24px; line-height: 1.4; }
+    .container { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 16px; }
+    .metric { font-size: 14px; font-weight: 600; }
+    .actions { display: flex; gap: 12px; margin: 16px 0 24px; }
+    button { appearance: none; border: 1px solid #8885; padding: 10px 16px; border-radius: 8px; background: #2d6cdf; color: #fff; cursor: pointer; font-size: 14px; }
+    button.secondary { background: #666; }
+    button.ghost { background: transparent; color: inherit; border-color: #aaa6; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .panel { border: 1px solid #0002; border-radius: 12px; padding: 16px; background: canvas; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .field { display: grid; gap: 6px; }
+    label { font-size: 13px; }
+    select, input[type="datetime-local"], input[type="text"], input[type="number"] { padding: 8px 10px; border: 1px solid #9995; border-radius: 8px; background: field; color: fieldtext; font-size: 14px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    .results { margin-top: 16px; }
+    .note { font-size: 12px; color: #888; }
+    .hidden { display: none; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #9995; border-top-color: #2d6cdf; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-left: 6px; }
+    .spinner.hidden { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .kv { display: grid; grid-template-columns: 220px 1fr; gap: 6px 12px; font-size: 13px; }
+    .kv .k { color: #555; }
+    .kv .v { font-weight: 600; }
+    .table-wrap { overflow: auto; border: 1px solid #0002; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #0001; text-align: left; white-space: nowrap; }
+    thead th { position: sticky; top: 0; background: #f4f6f8; }
+    pre { margin: 0; }
+    /* Modal styles */
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+    .modal { width: 100%; max-width: 900px; background: canvas; color: canvastext; border: 1px solid #0002; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.25); overflow: hidden; }
+    .modal header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #0002; }
+    .modal .content { padding: 10px 12px; max-height: 60vh; overflow: auto; }
+  </style>
+  
+</head>
+<body>
+  <div class="container">
+    <h1>CJCM Order WOS</h1>
+    <div class="actions">
+      <button id="btnShowWos" type="button">Show Order WOS</button>
+    </div>
+    <div id="panel" class="panel hidden"></div>
+    <div id="results" class="results" aria-live="polite"></div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div id="detailModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal" role="document">
+      <header>
+        <span id="detailModalTitle">Order History</span>
+        <button id="detailModalClose" class="ghost" type="button" title="Close">Close</button>
+      </header>
+      <div id="detailModalContent" class="content"></div>
+    </div>
+  </div>
+  <script>
+    const panel = document.getElementById('panel');
+    const results = document.getElementById('results');
+    const btnShowWos = document.getElementById('btnShowWos');
+
+    const ORACLE_ENDPOINT = 'http://127.0.0.1:8765/oracle/query';
+    const TABLES = {
+      CART: 'POJO_data.vzcm_data_ordersubmitentity',
+      ORDER: 'POJO_data.vzcm_data_orderconfirmationentity',
+      LINE: 'POJO_data.vzcm_data_lineentity'
+    };
+
+    // Static WorkObjectStatus map provided; used to seed dropdowns immediately
+    const STATIC_STATUS = {
+      CART: [
+        "Failed-AssignMTN",
+        "Failed-CCO",
+        "Failed-GenerateInstall",
+        "Failed-PreOrderWrite",
+        "Failed-SubmitPayment",
+        "Failed-UpdateCartStatus",
+        "Open",
+        "Pending-CartStatusUpdate",
+        "Pending-CreateReturnOrder",
+        "Pending-OrderCaseProcessing",
+        "Resolved-LineCompleted",
+        "Retry-CCO",
+        "Retry-PreOrderWrite",
+        "Retry-SubmitPayment"
+      ],
+      ORDER: [
+        "Failed-CartToOrder",
+        "Failed-ChargePayment",
+        "Failed-CreateCharge",
+        "Failed-CS",
+        "Failed-DPAandCustomerAgreement",
+        "Failed-FraudCheck",
+        "Failed-InsertTnC",
+        "Failed-ISPUDvcValidate",
+        "Failed-ModifyCredit",
+        "Failed-SapInventory",
+        "Failed-SaveLoan",
+        "Failed-SaveSddInfo",
+        "Failed-SP",
+        "Failed-SubmitActivation",
+        "Failed-TnCCheck",
+        "Failed-TnCCompute",
+        "Open",
+        "Pending-CommitOfferDetails",
+        "Pending-DeviceCaseProcessing",
+        "Pending-FraudCheckRequestSubmission",
+        "Pending-InventoryReservation",
+        "Pending-ISPUUpdates",
+        "Pending-LineCaseProcessing",
+        "Pending-OrderCompletion",
+        "Pending-ReadOrderSaveLoanDetails",
+        "Pending-ReadyForPickUp",
+        "Pending-ReadyForPickUpReminder1",
+        "Pending-ReadyForPickUpReminder2",
+        "Pending-ReadyForPickUpReminder3",
+        "Pending-ReceiptGeneration",
+        "Pending-RetryDPAandCustomerAgreement",
+        "Pending-SaveOfferDetails",
+        "Pending-SaveOrderDetails",
+        "Pending-SaveSDDInfo",
+        "Pending-ServiceOnlyActivationTrigger",
+        "Pending-ShipmentToLocker",
+        "Pending-SubmitBAPayment",
+        "Pending-SubmitPayment",
+        "Pending-TradeAccountCharge",
+        "Pending-TradeCreditStatusUpdate",
+        "Pending-TradeGiftCardActivation",
+        "Retry-CaptureSignature",
+        "Retry-CartToOrder",
+        "Retry-ChargePayment",
+        "Retry-FraudCheck",
+        "Retry-SapInventory",
+        "Retry-SubmitActivation",
+        "Retry-SubmitPayment",
+        "Retry-TnCCheck"
+      ],
+      LINE: [
+        "Failed-Activation",
+        "Failed-ActivationInfo",
+        "Failed-ActivationStatus",
+        "Failed-ActivationUpdate",
+        "Failed-CloseLoan",
+        "Failed-CreateLoan",
+        "Failed-ETNIPairing",
+        "Failed-PERS",
+        "Failed-RDB",
+        "Failed-Reactivation",
+        "Failed-RetrieveMtnStatus",
+        "Failed-SubmitActivation",
+        "Failed-UpdateICCID",
+        "Failed-ValidateBillingPasscode",
+        "Failed-ValidateICCID",
+        "Failed-ValidatePark",
+        "Open",
+        "Open-LineActivation",
+        "Open-PERSFail",
+        "Pending-3rdPartyLogicsticsAllocation",
+        "Pending-ActivationNotification",
+        "Pending-ActivationTrigger",
+        "Pending-ChargePayment",
+        "Pending-DCupdate",
+        "Pending-DistributionCenterAllocation",
+        "Pending-FetchSegementID",
+        "Pending-FulfilmentInitiation",
+        "Pending-IccidCreation",
+        "Pending-InitiateActivation",
+        "Pending-InventoryDeplete",
+        "Pending-IvrActivation",
+        "Pending-IVRValidation",
+        "Pending-MtnPairing",
+        "Pending-MtnPreQualification",
+        "Pending-PortInUpdates",
+        "Pending-RetryActivation",
+        "Pending-SaveICCIDDetails",
+        "Pending-ShipmentOutOfWarehouse",
+        "Pending-SIMOTACompletion",
+        "Pending-SubmitPayment",
+        "Pending-UserAuthentication",
+        "Resolved-Cancelled",
+        "Resolved-LineCompleted",
+        "Retry-Activation",
+        "Retry-ActivationOrderInfo",
+        "Retry-ActivationStatus",
+        "Retry-ActivationUpdate",
+        "Retry-CreateLoan",
+        "Retry-PERS",
+        "Retry-UpdateICCID"
+      ]
+    };
+
+    const STATUS_CACHE = {
+      CART: (STATIC_STATUS.CART || []).slice().sort((a,b)=>a.localeCompare(b)),
+      ORDER: (STATIC_STATUS.ORDER || []).slice().sort((a,b)=>a.localeCompare(b)),
+      LINE: (STATIC_STATUS.LINE || []).slice().sort((a,b)=>a.localeCompare(b))
+    };
+    const STATUS_FETCH = { CART: null, ORDER: null, LINE: null };
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    let lastSql = '';
+    let lastParams = {};
+    function previewBoundSql(sql, params) {
+      try {
+        let out = String(sql || '');
+        const keys = Object.keys(params || {}).sort((a,b) => b.length - a.length);
+        for (const k of keys) {
+          const v = params[k];
+          const rep = (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`;
+          out = out.replace(new RegExp(':' + k + '(?![A-Za-z0-9_])', 'g'), rep);
+        }
+        return out;
+      } catch { return sql || ''; }
+    }
+    function updateSqlPanel(sql, params, meta) {
+      lastSql = sql || '';
+      lastParams = params || {};
+      const sqlEl = document.getElementById('sqlText');
+      const paramsEl = document.getElementById('sqlParams');
+      const prevEl = document.getElementById('sqlPreview');
+      const durEl = document.getElementById('sqlDuration');
+      if (sqlEl) sqlEl.textContent = lastSql;
+      if (paramsEl) paramsEl.textContent = JSON.stringify(lastParams, null, 2);
+      if (prevEl) prevEl.textContent = previewBoundSql(lastSql, lastParams);
+      if (durEl) {
+        const ms = meta && typeof meta.durationMs === 'number' ? meta.durationMs : null;
+        const secs = ms === null ? '' : (ms / 1000).toFixed(3);
+        durEl.textContent = secs;
+      }
+    }
+
+    function setStatusOptions(selectEl, options) {
+      const optsHtml = '<option value="" disabled selected>Select status</option>' +
+        (options || []).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      selectEl.innerHTML = optsHtml;
+    }
+
+    async function getStatuses(entity) {
+      if (!entity || !TABLES[entity]) return [];
+      if (STATUS_CACHE[entity]) return STATUS_CACHE[entity];
+      if (STATUS_FETCH[entity]) { try { return await STATUS_FETCH[entity]; } catch { /* noop */ } }
+      STATUS_FETCH[entity] = (async () => {
+        const table = TABLES[entity];
+        const sql = `SELECT DISTINCT WORKOBJECTSTATUS FROM ${table} WHERE WORKOBJECTSTATUS IS NOT NULL ORDER BY WORKOBJECTSTATUS`;
+        try {
+          const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, maxRows: 2000 }) });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Failed');
+          const colIdx = (data.columns || []).indexOf('WORKOBJECTSTATUS');
+          const options = (data.rows || []).map(r => r[colIdx]).filter(v => v !== null && v !== undefined).map(v => String(v)).sort((a,b) => a.localeCompare(b));
+          STATUS_CACHE[entity] = options; return options;
+        } finally { STATUS_FETCH[entity] = null; }
+      })();
+      try { return await STATUS_FETCH[entity]; } catch { return STATUS_CACHE[entity] || []; }
+    }
+
+    // Force-fetch distinct statuses from DB, ignoring any cache/static values
+    async function fetchStatusesFromDb(entity) {
+      if (!entity || !TABLES[entity]) return [];
+      const table = TABLES[entity];
+      const sql = `SELECT DISTINCT WORKOBJECTSTATUS FROM ${table} WHERE WORKOBJECTSTATUS IS NOT NULL ORDER BY WORKOBJECTSTATUS`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, maxRows: 5000 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Failed to load distinct statuses');
+      const colIdx = (data.columns || []).indexOf('WORKOBJECTSTATUS');
+      return (data.rows || [])
+        .map(r => r[colIdx])
+        .filter(v => v !== null && v !== undefined)
+        .map(v => String(v))
+        .sort((a,b) => a.localeCompare(b));
+    }
+
+    // Prefetch all WorkObjectStatus lists once so dropdown loads instantly on selection
+    async function prefetchAllStatuses() {
+      try {
+        await Promise.all(['CART', 'ORDER', 'LINE'].map(getStatuses));
+      } catch (e) {
+        console.warn('Prefetch statuses failed; will fetch on demand.', e);
+      }
+    }
+
+    function lastIntervalSql(val) {
+      switch (val) {
+        case '15m': return "INTERVAL '15' MINUTE";
+        case '30m': return "INTERVAL '30' MINUTE";
+        case '1h': return "INTERVAL '1' HOUR";
+        case '2h': return "INTERVAL '2' HOUR";
+        case '3h': return "INTERVAL '3' HOUR";
+        case '4h': return "INTERVAL '4' HOUR";
+        case '8h': return "INTERVAL '8' HOUR";
+        case '1d': return "INTERVAL '1' DAY";
+        case '2d': return "INTERVAL '2' DAY";
+        default: return '';
+      }
+    }
+
+    function buildWosSql(entity, status, start, end, last) {
+      const params = {};
+      let sql = '';
+      const alias = entity === 'CART' ? 'sub' : (entity === 'ORDER' ? 'conf' : 'line');
+      if (entity === 'LINE') {
+        sql = `SELECT 
+    sub.cartid As CARTID, 
+    ful.TRANSACTIONTYPE,
+    conf.ordernumber as OrderNumber,
+    conf.locationcode as LocationCode,
+    sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
+    conf.WORKOBJECTSTATUS as ORDER_WORKOBJECTSTATUS,
+    line.WORKOBJECTSTATUS as LINE_WORKOBJECTSTATUS,
+    sub.PYSTATUSWORK as CART_PYSTATUSWORK,
+    conf.PYSTATUSWORK as ORDER_PYSTATUSWORK,
+    line.PYSTATUSWORK as LINE_PYSTATUSWORK,
+    sub.caseid As CART_CASEID, 
+    conf.caseid AS Order_Caseid,
+    line.caseid As Line_Caseid,
+    line.cartid as Line_CARTID,
+    line.ordernumber as LINE_OrderNumber,
+    line.locationcode as LINE_LOCATIONCODE,
+    conf.mtn as ORDER_MTN,    
+    line.mtn as LINE_MTN,
+    sub.PXCREATEDATETIME as CART_PXCREATEDATETIME,
+    conf.PXCREATEDATETIME as ORDER_PXCREATEDATETIME,
+    line.PXCREATEDATETIME as LINE_PXCREATEDATETIME,
+    line.MON as LINE_MON,
+    sub.ACCOUNTNUMBER as CART_ACCOUNTNUMBER
+FROM POJO_data.vzcm_data_lineentity line
+INNER JOIN POJO_data.vzcm_data_orderconfirmationentity conf 
+    ON line.cartid = conf.cartid 
+    AND line.ordernumber = conf.ordernumber
+INNER JOIN POJO_data.vzcm_data_ordersubmitentity sub 
+    ON line.cartid = sub.cartid
+INNER JOIN POJO_data.vzcm_data_fulfillmententity ful -- New Join added here
+    ON line.cartid = ful.cartid
+WHERE line.WORKOBJECTSTATUS = :status `;
+        params['status'] = status || '';
+      } else if (entity === 'ORDER') {
+        sql = `SELECT 
+    sub.cartid As CARTID, 
+    conf.ordernumber as OrderNumber,
+    conf.locationcode as LocationCode,
+    sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
+    conf.WORKOBJECTSTATUS as ORDER_WORKOBJECTSTATUS,
+    line.WORKOBJECTSTATUS as LINE_WORKOBJECTSTATUS,
+    sub.PYSTATUSWORK as CART_PYSTATUSWORK,
+    conf.PYSTATUSWORK as ORDER_PYSTATUSWORK,
+    line.PYSTATUSWORK as LINE_PYSTATUSWORK,
+    sub.caseid As CART_CASEID, 
+    conf.caseid AS Order_Caseid,
+    line.caseid As Line_Caseid,
+    line.cartid as Line_CARTID,
+    line.ordernumber as LINE_OrderNumber,
+    line.locationcode as LINE_LOCATIONCODE,
+    conf.mtn as ORDER_MTN,    
+    line.mtn as LINE_MTN,
+    sub.PXCREATEDATETIME as CART_PXCREATEDATETIME,
+    conf.PXCREATEDATETIME as ORDER_PXCREATEDATETIME,
+    line.PXCREATEDATETIME as LINE_PXCREATEDATETIME,
+    line.MON as LINE_MON,
+    sub.ACCOUNTNUMBER as CART_ACCOUNTNUMBER
+FROM POJO_data.vzcm_data_orderconfirmationentity conf
+INNER JOIN POJO_data.vzcm_data_ordersubmitentity sub 
+    ON conf.cartid = sub.cartid 
+INNER JOIN POJO_data.vzcm_data_lineentity line 
+    ON conf.cartid = line.cartid 
+INNER JOIN POJO_data.vzcm_data_fulfillmententity ful -- New Join added here
+    ON conf.cartid = ful.cartid
+WHERE conf.WORKOBJECTSTATUS = :status`;
+        params['status'] = status || '';
+      } else if (entity === 'CART') {
+        sql = `SELECT 
+    sub.cartid As CARTID, 
+    conf.ordernumber as OrderNumber,
+    conf.locationcode as LocationCode,
+    sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
+    conf.WORKOBJECTSTATUS as ORDER_WORKOBJECTSTATUS,
+    line.WORKOBJECTSTATUS as LINE_WORKOBJECTSTATUS,
+    sub.PYSTATUSWORK as CART_PYSTATUSWORK,
+    conf.PYSTATUSWORK as ORDER_PYSTATUSWORK,
+    line.PYSTATUSWORK as LINE_PYSTATUSWORK,
+    sub.caseid As CART_CASEID, 
+    conf.caseid AS Order_Caseid,
+    line.caseid As Line_Caseid,
+    line.cartid as Line_CARTID,
+    line.ordernumber as LINE_OrderNumber,
+    line.locationcode as LINE_LOCATIONCODE,
+    conf.mtn as ORDER_MTN,    
+    line.mtn as LINE_MTN,
+    sub.PXCREATEDATETIME as CART_PXCREATEDATETIME,
+    conf.PXCREATEDATETIME as ORDER_PXCREATEDATETIME,
+    line.PXCREATEDATETIME as LINE_PXCREATEDATETIME,
+    line.MON as LINE_MON,
+    sub.ACCOUNTNUMBER as CART_ACCOUNTNUMBER
+FROM POJO_data.vzcm_data_ordersubmitentity sub
+INNER JOIN POJO_data.vzcm_data_orderconfirmationentity conf 
+    ON sub.cartid = conf.cartid 
+INNER JOIN POJO_data.vzcm_data_lineentity line 
+    ON sub.cartid = line.cartid 
+INNER JOIN POJO_data.vzcm_data_fulfillmententity ful -- New Join added here
+    ON sub.cartid = ful.cartid
+WHERE sub.WORKOBJECTSTATUS = :status`;
+        params['status'] = status || '';
+      } else {
+        sql = 'SELECT 1 FROM dual WHERE 1=0';
+      }
+      // Append time condition: prefer Last, else Start/End, else default 30 minutes
+      if (entity === 'CART' || entity === 'ORDER' || entity === 'LINE') {
+        if (last) {
+          const iv = lastIntervalSql(last);
+          if (iv) {
+            sql += ` AND ${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - ${iv}`;
+          }
+        } else if (start && end) {
+          sql += ` AND ${alias}.PXCREATEDATETIME BETWEEN TO_TIMESTAMP(:start_ts, 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP(:end_ts, 'YYYY-MM-DD"T"HH24:MI')`;
+          params['start_ts'] = start;
+          params['end_ts'] = end;
+        } else {
+          sql += ` AND ${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - INTERVAL '30' MINUTE`;
+        }
+      }
+      return { sql, params };
+    }
+
+    function buildVerticalListHtml(columns, rows) {
+      if (!columns.length || !rows.length) { return '<div class="note">No data found.</div>'; }
+      const makeKV = (cols, row) => {
+        const pairs = cols.map((c, i) => ({ k: c, v: row[i] }));
+        const inner = pairs.map(p => {
+          const val = (p.v === null || p.v === undefined || (typeof p.v === 'string' && p.v.trim() === '')) ? 'N/A' : p.v;
+          return `<div class="k">${escapeHtml(p.k)}</div><div class="v">${escapeHtml(val)}</div>`;
+        }).join('');
+        return `<div class="kv">${inner}</div>`;
+      };
+      return rows.map(r => `<div>${makeKV(columns, r)}</div>`).join('<hr style="border:none;border-top:1px solid #0002;margin:12px 0;"/>');
+    }
+
+    function buildTableHtml(columns, rows) {
+      if (!columns.length) { return '<div class="note">No columns returned.</div>'; }
+      const upCols = columns.map(c => String(c || '').toUpperCase());
+      const idxCart = upCols.indexOf('CARTID');
+      const idxOrd = upCols.indexOf('ORDERNUMBER');
+      const idxLoc = upCols.indexOf('LOCATIONCODE');
+      const idxMtn = upCols.indexOf('MTN') >= 0 ? upCols.indexOf('MTN') : (upCols.indexOf('ORDER_MTN') >= 0 ? upCols.indexOf('ORDER_MTN') : upCols.indexOf('LINE_MTN'));
+      const thead = '<thead><tr>' + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
+      const tbody = '<tbody>' + rows.map(r => {
+        return '<tr>' + r.map((v, i) => {
+          const raw = (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) ? 'N/A' : v;
+          if (i === idxCart && raw !== 'N/A') {
+            const ord = idxOrd >= 0 ? r[idxOrd] : '';
+            const loc = idxLoc >= 0 ? r[idxLoc] : '';
+            const mtn = idxMtn >= 0 ? r[idxMtn] : '';
+            return `<td><button class="wos-cart-btn" data-cartid="${escapeHtml(String(raw))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">${escapeHtml(String(raw))}</button></td>`;
+          }
+          return `<td>${escapeHtml(raw)}</td>`;
+        }).join('') + '</tr>';
+      }).join('') + '</tbody>';
+      return `<div class="table-wrap"><table>${thead}${tbody}</table></div>`;
+    }
+
+    btnShowWos.addEventListener('click', () => {
+      renderWosForm();
+    });
+
+    function renderWosForm() {
+      panel.innerHTML = `
+        <div class="grid">
+          <div class="field">
+            <label for="entityType">Hierarchy</label>
+            <select id="entityType" name="entityType" required>
+              <option value="" disabled selected>Select Hierarchy</option>
+              <option value="CART">CART</option>
+              <option value="ORDER">ORDER</option>
+              <option value="LINE">LINE</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="workStatus">WorkObjectStatus <span id="statusSpinner" class="spinner hidden" aria-hidden="true"></span></label>
+            <select id="workStatus" name="workStatus" disabled>
+              <option value="" disabled selected>Select status</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="startDateTime">Start Date/Time</label>
+            <input id="startDateTime" name="startDateTime" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="endDateTime">End Date/Time</label>
+            <input id="endDateTime" name="endDateTime" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="lastRange">Last</label>
+            <select id="lastRange" name="lastRange">
+              <option value="" selected>Select duration</option>
+              <option value="15m">15 minutes</option>
+              <option value="30m">30 minutes</option>
+              <option value="1h">1 hour</option>
+              <option value="2h">2 hours</option>
+              <option value="3h">3 hours</option>
+              <option value="4h">4 hours</option>
+              <option value="8h">8 hours</option>
+              <option value="1d">1 day</option>
+              <option value="2d">2 days</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btnSubmit" type="button" disabled>Submit</button>
+          <button id="btnToggleSql" class="ghost" type="button">Show SQL</button>
+        </div>
+        <div id="sqlPanel" class="hidden">
+          <div class="actions" style="margin-top:8px;">
+            <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
+          </div>
+          <div class="note"><strong>SQL</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
+          <div class="note"><strong>Time taken (s)</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration"></code></pre>
+          <div class="note"><strong>Parameters</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+          <div class="note"><strong>Preview with values</strong> (display only)</div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
+        </div>
+
+        <div id="statusDump" class="panel" style="margin-top:16px;">
+          <div class="actions" style="flex-wrap:wrap;gap:8px 12px;align-items:center;">
+            <button id="btnLoadAllStatuses" type="button" class="secondary">Load Distinct WorkObjectStatus</button>
+            <button id="btnCopyAllStatuses" type="button" class="ghost" disabled>Copy All (JSON)</button>
+            <span id="dumpSpinner" class="spinner hidden" aria-hidden="true"></span>
+          </div>
+          <div class="note">Shows distinct WorkObjectStatus for CART, ORDER, LINE. Use Copy to save statically.</div>
+          <div id="statusDumpOut" class="results"></div>
+        </div>
+      `;
+      panel.classList.remove('hidden');
+
+      const entitySel = document.getElementById('entityType');
+      const statusSel = document.getElementById('workStatus');
+      const btnSubmit = document.getElementById('btnSubmit');
+      const statusSpinner = document.getElementById('statusSpinner');
+      const btnToggleSql = document.getElementById('btnToggleSql');
+      const sqlPanel = document.getElementById('sqlPanel');
+      const btnCopySql = document.getElementById('btnCopySql');
+      const btnLoadAllStatuses = document.getElementById('btnLoadAllStatuses');
+      const btnCopyAllStatuses = document.getElementById('btnCopyAllStatuses');
+      const dumpSpinner = document.getElementById('dumpSpinner');
+      const statusDumpOut = document.getElementById('statusDumpOut');
+
+      function setStatusLoading(on) {
+        statusSpinner.classList.toggle('hidden', !on);
+        entitySel.disabled = !!on;
+        if (on) { statusSel.disabled = true; btnSubmit.disabled = true; }
+      }
+      function setSubmitEnabled(enabled) { btnSubmit.disabled = !enabled; }
+
+      entitySel.addEventListener('change', async () => {
+        const entity = entitySel.value;
+        const cached = STATUS_CACHE[entity];
+        if (cached && Array.isArray(cached)) {
+          setStatusOptions(statusSel, cached);
+          statusSel.disabled = false; setSubmitEnabled(true); return;
+        }
+        // No spinner: just disable controls during fetch
+        entitySel.disabled = true; statusSel.disabled = true; btnSubmit.disabled = true;
+        try {
+          const options = await getStatuses(entity);
+          setStatusOptions(statusSel, options);
+          statusSel.disabled = false; setSubmitEnabled(true);
+        } catch (e) {
+          console.error('Status load error', e);
+          statusSel.innerHTML = '<option value="" disabled selected>Error loading statuses</option>';
+          alert('Failed to load WorkObjectStatus. Ensure server is running and Oracle env is set.');
+        } finally { entitySel.disabled = false; }
+      });
+
+      setStatusLoading(false);
+
+      btnToggleSql.addEventListener('click', () => {
+        const show = sqlPanel.classList.contains('hidden');
+        sqlPanel.classList.toggle('hidden');
+        btnToggleSql.textContent = show ? 'Hide SQL' : 'Show SQL';
+      });
+
+      btnCopySql.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
+        catch(e) { console.error('Copy failed', e); }
+      });
+
+      btnLoadAllStatuses.addEventListener('click', async () => {
+        btnLoadAllStatuses.disabled = true;
+        btnCopyAllStatuses.disabled = true;
+        dumpSpinner.classList.remove('hidden');
+        statusDumpOut.innerHTML = '<div class="note">Loading distinct statuses for all hierarchies...</div>';
+        try {
+          // Always pull fresh from DB for the dump
+          const [cart, order, line] = await Promise.all([
+            fetchStatusesFromDb('CART'),
+            fetchStatusesFromDb('ORDER'),
+            fetchStatusesFromDb('LINE')
+          ]);
+          const html = buildStatusesOutput({ CART: cart, ORDER: order, LINE: line });
+          statusDumpOut.innerHTML = html;
+          btnCopyAllStatuses.disabled = false;
+        } catch (e) {
+          console.error('Load statuses error', e);
+          statusDumpOut.innerHTML = `<div class="error">${escapeHtml(e.message || 'Failed to load statuses')}</div>`;
+        } finally {
+          dumpSpinner.classList.add('hidden');
+          btnLoadAllStatuses.disabled = false;
+        }
+      });
+
+      btnCopyAllStatuses.addEventListener('click', async () => {
+        try {
+          const jsonEl = document.getElementById('statusDumpJson');
+          const text = jsonEl ? jsonEl.textContent : '';
+          if (!text) { alert('No data to copy'); return; }
+          await navigator.clipboard.writeText(text);
+          alert('All statuses (JSON) copied to clipboard');
+        } catch(e) { console.error('Copy all failed', e); }
+      });
+
+      btnSubmit.addEventListener('click', async () => {
+        const entity = entitySel.value;
+        const status = statusSel.value;
+        const start = document.getElementById('startDateTime').value;
+        const end = document.getElementById('endDateTime').value;
+        const last = document.getElementById('lastRange').value;
+        if (!entity) { alert('Please select Hierarchy.'); return; }
+        if (!status) { alert('Please select WorkObjectStatus.'); return; }
+        if (start && end && new Date(start) > new Date(end)) { alert('Start must be before End.'); return; }
+
+        entitySel.disabled = true; statusSel.disabled = true; btnSubmit.disabled = true;
+        results.innerHTML = '<div class="note">Running query...</div>';
+        try {
+          const spec = buildWosSql(entity, status, start, end, last);
+          // Auto-show SQL panel with the current query immediately
+          sqlPanel.classList.remove('hidden');
+          btnToggleSql.textContent = 'Hide SQL';
+          updateSqlPanel(spec.sql, spec.params, {});
+          // Run count and data concurrently to show exact count
+          const countSql = `SELECT COUNT(*) AS CNT FROM (${spec.sql}) t`;
+          const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
+          const pCount = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 }) })
+            .then(r => r.json().then(j => ({ ok: r.ok, data: j })));
+          const pData = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: spec.sql, params: spec.params, maxRows: 500 }) })
+            .then(r => r.json().then(j => ({ ok: r.ok, data: j })));
+          const [countRes, dataRes] = await Promise.all([pCount, pData]);
+          if (!countRes.ok) throw new Error(countRes.data.error || 'Count failed');
+          if (!dataRes.ok) throw new Error(dataRes.data.error || 'Query failed');
+          const t1 = (window.performance && performance.now) ? performance.now() : Date.now();
+          updateSqlPanel(spec.sql, spec.params, { durationMs: t1 - t0 });
+          const rows = dataRes.data.rows || [];
+          const cols = dataRes.data.columns || [];
+          const idxCnt = (countRes.data.columns || []).indexOf('CNT');
+          const totalCnt = idxCnt >= 0 && (countRes.data.rows || [])[0] ? (countRes.data.rows[0][idxCnt]) : rows.length;
+          const heading = status ? `Order Status: ${escapeHtml(status)}` : 'Results';
+          results.innerHTML = `
+            <div class="metric">${heading}</div>
+            <div class="metric">No of records: ${totalCnt}</div>
+          ` + buildTableHtml(cols, rows);
+          // Wire cart button clicks for history pop-up
+          results.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.wos-cart-btn');
+            if (!btn) return;
+            const cartid = btn.getAttribute('data-cartid') || '';
+            const ordernumber = btn.getAttribute('data-ordernumber') || '';
+            const locationcode = btn.getAttribute('data-locationcode') || '';
+            const mtn = btn.getAttribute('data-mtn') || '';
+            btn.disabled = true;
+            try {
+              openModal('Order History', '<div class="note">Loading history... <span class="spinner"></span></div>');
+              const hist = await fetchOrderHistory(cartid, ordernumber, locationcode, mtn);
+              const contentEl = document.getElementById('detailModalContent');
+              contentEl.innerHTML = buildTableHtml(hist.columns || [], hist.rows || []);
+            } catch(err) {
+              console.error('Order history error', err);
+              const contentEl = document.getElementById('detailModalContent');
+              contentEl.innerHTML = `<div class="error">${escapeHtml(err.message || 'Failed to load history')}</div>`;
+            } finally {
+              btn.disabled = false;
+            }
+          }, { once: false });
+        } catch (e) {
+          console.error('WOS error', e);
+          results.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+        } finally {
+          entitySel.disabled = false; btnSubmit.disabled = false; /* keep status disabled post-submit? not required here */
+        }
+      });
+
+      // Prefetch status lists silently for all hierarchies
+      prefetchAllStatuses();
+    }
+
+    // Start prefetch early to avoid any spinner or delay once form is shown
+    (async () => { try { await prefetchAllStatuses(); } catch {} })();
+
+    function buildStatusesOutput(map) {
+      try {
+        const cart = Array.isArray(map.CART) ? map.CART : [];
+        const order = Array.isArray(map.ORDER) ? map.ORDER : [];
+        const line = Array.isArray(map.LINE) ? map.LINE : [];
+        const json = JSON.stringify({ CART: cart, ORDER: order, LINE: line }, null, 2);
+        const section = (name, arr, codeId) => {
+          const csv = arr.join(', ');
+          return `
+            <div style="margin-top:12px;">
+              <div class="note"><strong>${escapeHtml(name)}</strong> (${arr.length} values)</div>
+              <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="${codeId}">${escapeHtml(csv)}</code></pre>
+            </div>
+          `;
+        };
+        return `
+          <div class="note"><strong>All (JSON)</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="statusDumpJson">${escapeHtml(json)}</code></pre>
+          ${section('CART', cart, 'statusDumpCart')}
+          ${section('ORDER', order, 'statusDumpOrder')}
+          ${section('LINE', line, 'statusDumpLine')}
+        `;
+      } catch(e) {
+        return `<div class="error">${escapeHtml(e.message || 'Failed to render statuses')}</div>`;
+      }
+    }
+
+    // Optional: render the form on load for convenience
+    // renderWosForm();
+    async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn) {
+      const whereParts = [];
+      const params = {};
+      if (cartid && cartid.trim()) { whereParts.push('sub.cartid = :cartid'); params.cartid = cartid; }
+      if (ordernumber && locationcode && ordernumber.trim() && locationcode.trim()) { whereParts.push('(sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)'); params.ordernumber = ordernumber; params.locationcode = locationcode; }
+      if (mtn && mtn.trim()) { whereParts.push('sub.mtn = :mtn'); params.mtn = mtn; }
+      // Fallback: if no keys provided, return empty
+      if (whereParts.length === 0) {
+        return { columns: [], rows: [] };
+      }
+      const sql = `SELECT 
+    HIERARCHY, ENTITY, ENTITYSTEP, WORKOBJECTSTATUS, PYSTATUSWORK, entitystepstatus, ENTITYSTEPTYPE, CREATEDATETIME, PROCESSSTEP, PROCESSACTION, MON, ACCOUNTNUMBER 
+  FROM POJO_data.vzcm_data_orderhistory sub 
+  WHERE ${whereParts.join(' OR ')}
+  ORDER BY CREATEDATETIME DESC`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 500 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'History query failed');
+      return data;
+    }
+
+    function openModal(title, html) {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      const titleEl = document.getElementById('detailModalTitle');
+      const contentEl = document.getElementById('detailModalContent');
+      if (titleEl) titleEl.textContent = title || 'Details';
+      if (contentEl) contentEl.innerHTML = html || '';
+      backdrop.style.display = 'flex';
+      backdrop.setAttribute('aria-hidden', 'false');
+    }
+    function closeModal() {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      const contentEl = document.getElementById('detailModalContent');
+      backdrop.style.display = 'none';
+      backdrop.setAttribute('aria-hidden', 'true');
+      contentEl.innerHTML = '';
+    }
+    (function initModal() {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      document.getElementById('detailModalClose').addEventListener('click', closeModal);
+      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+    })();
+  </script>
+</body>
+</html>
