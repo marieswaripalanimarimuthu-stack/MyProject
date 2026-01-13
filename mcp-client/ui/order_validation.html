@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CJCM Order Validation</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; padding: 24px; line-height: 1.4; }
+    .container { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin: 0 0 16px; }
+    .actions { display: flex; gap: 12px; margin: 16px 0 24px; }
+    button { appearance: none; border: 1px solid #8885; padding: 10px 16px; border-radius: 8px; background: #2d6cdf; color: #fff; cursor: pointer; font-size: 14px; }
+    button.secondary { background: #666; }
+    button.ghost { background: transparent; color: inherit; border-color: #aaa6; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+    .panel { border: 1px solid #0002; border-radius: 12px; padding: 16px; background: canvas; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .field { display: grid; gap: 6px; }
+    label { font-size: 13px; }
+    select, input[type="datetime-local"] { padding: 8px 10px; border: 1px solid #9995; border-radius: 8px; background: field; color: fieldtext; font-size: 14px; }
+    .results { margin-top: 16px; }
+    .table-wrap { overflow: auto; border: 1px solid #0002; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid #0001; text-align: left; }
+    thead th { position: sticky; top: 0; background: #f4f6f8; }
+    .note { font-size: 12px; color: #888; }
+    .metric { font-size: 16px; font-weight: 600; }
+    .hidden { display: none; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #9995; border-top-color: #2d6cdf; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: middle; margin-left: 6px; }
+    .spinner.hidden { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Tree view styles */
+    .tree { margin-top: 12px; }
+    .tree ul { list-style: none; padding-left: 18px; }
+    .tree .node { padding: 10px 12px; border: 1px solid #0002; border-radius: 10px; margin: 8px 0; background: #f9fafb; }
+    .tree .node.root { background: #e8f7ec; border-color: #24a148; }
+    .tree .node.order { background: #fdecec; border-color: #d93025; }
+    .tree .node.line { background: #ecf2ff; border-color: #3b82f6; }
+    .kv { display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px; font-size: 13px; }
+    .kv .k { color: #555; }
+    .kv .v { font-weight: 600; }
+    .case-link { color: inherit; text-decoration: underline; cursor: pointer; }
+    .hier-label { font-weight: 700; color: #111; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+    .toggle { cursor: pointer; font-weight: 700; display: inline-block; width: 1.2em; text-align: center; border: 1px solid #0002; border-radius: 4px; }
+    .children { }
+    .collapsed > .children { display: none; }
+
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+    .modal { width: 100%; max-width: 420px; background: canvas; color: canvastext; border: 1px solid #0002; border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.25); overflow: hidden; }
+    .modal header { padding: 14px 16px; font-weight: 600; border-bottom: 1px solid #0002; display: flex; align-items: center; justify-content: space-between; }
+    .modal .content { padding: 16px; display: grid; gap: 12px; max-height: 60vh; overflow: auto; }
+    .modal footer { padding: 12px 16px; border-top: 1px solid #0002; display: flex; gap: 8px; justify-content: flex-end; }
+
+    .case-btn { appearance: none; background: transparent; border: 1px solid #2d6cdf; color: #2d6cdf; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .case-btn:hover { background: rgba(45,108,223,0.06); }
+    .case-btn:active { transform: translateY(1px); }
+    .case-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>CJCM Order Validation</h1>
+    <div class="actions">
+      <button id="btnViewHierarchy" type="button" title="View Hierarchy">View Hierarchy</button>
+      <button id="btnOrderSnapshots" type="button" title="Order Snapshots">Order Snapshots</button>
+    </div>
+    <div id="panel" class="panel"></div>
+    <div id="results" class="results" aria-live="polite"></div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div id="detailModalBackdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="modal" role="document">
+      <header>
+        <span id="detailModalTitle">Details</span>
+        <button id="detailModalClose" class="ghost" type="button" title="Close">Close</button>
+      </header>
+      <div id="detailModalContent" class="content"></div>
+      <footer>
+        <button id="detailModalCloseFooter" class="secondary" type="button">Close</button>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    const btnViewHierarchy = document.getElementById('btnViewHierarchy');
+    const btnOrderSnapshots = document.getElementById('btnOrderSnapshots');
+    const panel = document.getElementById('panel');
+    const results = document.getElementById('results');
+
+    const ORACLE_ENDPOINT = 'http://127.0.0.1:8765/oracle/query';
+    const TABLES = {
+      CART: 'POJO_data.vzcm_data_ordersubmitentity',
+      ORDER: 'POJO_data.vzcm_data_orderconfirmationentity',
+      LINE: 'POJO_data.vzcm_data_lineentity'
+    };
+
+    // Cache WorkObjectStatus per hierarchy to avoid repeated DB calls
+    const STATUS_CACHE = { CART: null, ORDER: null, LINE: null };
+    const STATUS_FETCH = { CART: null, ORDER: null, LINE: null };
+
+    function setStatusOptions(selectEl, options) {
+      const optsHtml = '<option value="" disabled selected>Select status</option>' +
+        (options || []).map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      selectEl.innerHTML = optsHtml;
+    }
+
+    async function getStatuses(entity) {
+      if (!entity || !TABLES[entity]) return [];
+      if (STATUS_CACHE[entity]) return STATUS_CACHE[entity];
+      if (STATUS_FETCH[entity]) {
+        try { return await STATUS_FETCH[entity]; } catch { /* fallthrough */ }
+      }
+      // Start a single fetch promise per entity
+      STATUS_FETCH[entity] = (async () => {
+        const table = TABLES[entity];
+        const sql = `SELECT DISTINCT WORKOBJECTSTATUS FROM ${table} WHERE WORKOBJECTSTATUS IS NOT NULL ORDER BY WORKOBJECTSTATUS`;
+        try {
+          const resp = await fetch(ORACLE_ENDPOINT, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql, maxRows: 2000 })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Failed');
+          const colIdx = (data.columns || []).indexOf('WORKOBJECTSTATUS');
+          const options = (data.rows || [])
+            .map(r => r[colIdx])
+            .filter(v => v !== null && v !== undefined)
+            .map(v => String(v))
+            .sort((a,b) => a.localeCompare(b));
+          STATUS_CACHE[entity] = options;
+          return options;
+        } finally {
+          STATUS_FETCH[entity] = null;
+        }
+      })();
+      try { return await STATUS_FETCH[entity]; }
+      catch { return STATUS_CACHE[entity] || []; }
+    }
+
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    let lastSql = '';
+    let lastParams = {};
+    function previewBoundSql(sql, params) {
+      try {
+        let out = String(sql || '');
+        const keys = Object.keys(params || {}).sort((a,b) => b.length - a.length);
+        for (const k of keys) {
+          const v = params[k];
+          const rep = (v === null || v === undefined) ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`;
+          out = out.replace(new RegExp(':' + k + '(?![A-Za-z0-9_])', 'g'), rep);
+        }
+        return out;
+      } catch { return sql || ''; }
+    }
+    function updateSqlPanel(sql, params) {
+      lastSql = sql || '';
+      lastParams = params || {};
+      const sqlEl = document.getElementById('sqlText');
+      const paramsEl = document.getElementById('sqlParams');
+      const prevEl = document.getElementById('sqlPreview');
+      if (sqlEl) sqlEl.textContent = lastSql;
+      if (paramsEl) paramsEl.textContent = JSON.stringify(lastParams, null, 2);
+      if (prevEl) prevEl.textContent = previewBoundSql(lastSql, lastParams);
+    }
+
+    // Modal helpers
+    function openModal(title, html) {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      const titleEl = document.getElementById('detailModalTitle');
+      const contentEl = document.getElementById('detailModalContent');
+      titleEl.textContent = title || 'Details';
+      contentEl.innerHTML = html || '';
+      backdrop.style.display = 'flex';
+      backdrop.setAttribute('aria-hidden', 'false');
+    }
+    function closeModal() {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      const contentEl = document.getElementById('detailModalContent');
+      backdrop.style.display = 'none';
+      backdrop.setAttribute('aria-hidden', 'true');
+      contentEl.innerHTML = '';
+    }
+    (function initModal() {
+      const backdrop = document.getElementById('detailModalBackdrop');
+      document.getElementById('detailModalClose').addEventListener('click', closeModal);
+      document.getElementById('detailModalCloseFooter').addEventListener('click', closeModal);
+      backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
+    })();
+
+    function renderSnapshotsForm() {
+      panel.innerHTML = `
+        <div class="grid">
+          <div class="field">
+            <label for="entityType">Hierarchy</label>
+            <select id="entityType" name="entityType" required>
+              <option value="" disabled selected>Select Hierarchy</option>
+              <option value="CART">CART</option>
+              <option value="ORDER">ORDER</option>
+              <option value="LINE">LINE</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="workStatus">WorkObjectStatus <span id="statusSpinner" class="spinner hidden" aria-hidden="true"></span></label>
+            <select id="workStatus" name="workStatus" disabled>
+              <option value="" disabled selected>Select status</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="startDateTime">Start Date/Time</label>
+            <input id="startDateTime" name="startDateTime" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="endDateTime">End Date/Time</label>
+            <input id="endDateTime" name="endDateTime" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="lastRange">Last</label>
+            <select id="lastRange" name="lastRange">
+              <option value="" selected>Select duration</option>
+              <option value="15m">15 minutes</option>
+              <option value="30m">30 minutes</option>
+              <option value="1h">1 hour</option>
+              <option value="2h">2 hours</option>
+              <option value="3h">3 hours</option>
+              <option value="4h">4 hours</option>
+              <option value="8h">8 hours</option>
+              <option value="1d">1 day</option>
+              <option value="2d">2 days</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="btnSubmit" type="button" disabled>Submit</button>
+          <button id="btnToggleSql" class="ghost" type="button">Show SQL</button>
+        </div>
+        <div id="sqlPanel" class="hidden">
+          <div class="actions" style="margin-top:8px;">
+            <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
+          </div>
+          <div class="note"><strong>SQL</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
+          <div class="note"><strong>Parameters</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+          <div class="note"><strong>Preview with values</strong> (display only)</div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
+        </div>
+      `;
+
+      const entitySel = document.getElementById('entityType');
+      const statusSel = document.getElementById('workStatus');
+      const btnSubmit = document.getElementById('btnSubmit');
+      const statusSpinner = document.getElementById('statusSpinner');
+      const btnToggleSql = document.getElementById('btnToggleSql');
+      const sqlPanel = document.getElementById('sqlPanel');
+      const sqlText = document.getElementById('sqlText');
+      const btnCopySql = document.getElementById('btnCopySql');
+
+      function setStatusLoading(on) {
+        statusSpinner.classList.toggle('hidden', !on);
+        // Lock Hierarchy while statuses are loading
+        entitySel.disabled = !!on;
+        // Only force-disable Status and Submit when starting to load
+        if (on) {
+          statusSel.disabled = true;
+          btnSubmit.disabled = true;
+        }
+        // When turning off loading, leave status/submit state to specific handlers
+      }
+      function setSubmitEnabled(enabled) {
+        btnSubmit.disabled = !enabled;
+      }
+
+      entitySel.addEventListener('change', async () => {
+        const entity = entitySel.value;
+        const cached = STATUS_CACHE[entity];
+        if (cached && Array.isArray(cached)) {
+          setStatusOptions(statusSel, cached);
+          statusSel.disabled = false;
+          setSubmitEnabled(true);
+          return;
+        }
+        setStatusLoading(true);
+        try {
+          const options = await getStatuses(entity);
+          setStatusOptions(statusSel, options);
+          statusSel.disabled = false;
+          setSubmitEnabled(true);
+        } catch (e) {
+          console.error('Status load error', e);
+          statusSel.innerHTML = '<option value="" disabled selected>Error loading statuses</option>';
+          alert('Failed to load WorkObjectStatus. Ensure server is running and Oracle env is set.');
+        } finally {
+          setStatusLoading(false);
+        }
+      });
+
+      // Ensure spinner is hidden on initial render
+      setStatusLoading(false);
+
+      // Lazy-only: no background prefetch to avoid upfront delay
+
+      btnSubmit.addEventListener('click', async () => {
+        const entity = entitySel.value;
+        const status = statusSel.value;
+        const start = document.getElementById('startDateTime').value;
+        const end = document.getElementById('endDateTime').value;
+        const last = document.getElementById('lastRange').value;
+        if (!entity) { alert('Please select Hierarchy.'); return; }
+        if (start && end && new Date(start) > new Date(end)) { alert('Start must be before End.'); return; }
+        entitySel.disabled = true;
+        statusSel.disabled = true; // stays disabled after submit as requested
+        btnSubmit.disabled = true;
+        // Build and save snapshot spec; render action buttons for user to run Count or View Orders
+        const spec = buildSnapshotSpec(entity, status, start, end, last);
+        window.__lastSnapshotSpec = spec;
+        renderSnapshotActions(spec);
+        entitySel.disabled = false;
+        // Keep WorkObjectStatus disabled after submit per requirement
+        // statusSel.disabled remains true
+        btnSubmit.disabled = false;
+      });
+
+      btnToggleSql.addEventListener('click', () => {
+        const show = sqlPanel.classList.contains('hidden');
+        sqlPanel.classList.toggle('hidden');
+        btnToggleSql.textContent = show ? 'Hide SQL' : 'Show SQL';
+      });
+
+      btnCopySql.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
+        catch(e) { console.error('Copy failed', e); }
+      });
+    }
+
+    function getEntityTableAlias(entity) {
+      if (entity === 'CART') return { table: TABLES.CART, alias: 'sub' };
+      if (entity === 'ORDER') return { table: TABLES.ORDER, alias: 'conf' };
+      if (entity === 'LINE') return { table: TABLES.LINE, alias: 'line' };
+      return { table: null, alias: null };
+    }
+
+    function buildSnapshotSpec(entity, status, start, end, last) {
+      const { table, alias } = getEntityTableAlias(entity);
+      const params = {};
+      const where = [];
+      if (status) { where.push(`${alias}.WORKOBJECTSTATUS = :status`); params['status'] = status; }
+      if (last) {
+        const iv = lastIntervalSql(last);
+        if (iv) {
+          where.push(`${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - ${iv}`);
+        }
+      } else if (start && end) {
+        where.push(`${alias}.PXCREATEDATETIME BETWEEN TO_TIMESTAMP(:start_ts, 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP(:end_ts, 'YYYY-MM-DD"T"HH24:MI')`);
+        params['start_ts'] = start;
+        params['end_ts'] = end;
+      } else {
+        where.push(`${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - INTERVAL '30' MINUTE`);
+      }
+      return { entity, table, alias, where: where.join(' AND '), params };
+    }
+
+    function lastIntervalSql(val) {
+      switch (val) {
+        case '15m': return "INTERVAL '15' MINUTE";
+        case '30m': return "INTERVAL '30' MINUTE";
+        case '1h': return "INTERVAL '1' HOUR";
+        case '2h': return "INTERVAL '2' HOUR";
+        case '3h': return "INTERVAL '3' HOUR";
+        case '4h': return "INTERVAL '4' HOUR";
+        case '8h': return "INTERVAL '8' HOUR";
+        case '1d': return "INTERVAL '1' DAY";
+        case '2d': return "INTERVAL '2' DAY";
+        default: return '';
+      }
+    }
+
+    function renderSnapshotActions(spec) {
+      const actions = `
+        <div class="actions" style="flex-wrap: wrap; gap: 8px 12px; align-items: center;">
+          <button id="btnSnapCount" type="button">Count</button>
+          <button id="btnSnapView" type="button" class="secondary">View Orders</button>
+          <button id="btnSnapExport" type="button" class="ghost" disabled>Export CSV</button>
+          <label for="snapMaxRows" style="font-size:12px; color:#666;">Max Rows</label>
+          <input id="snapMaxRows" type="number" min="1" value="500" style="width:90px; padding:6px 8px; border:1px solid #9995; border-radius:8px; background:field; color:fieldtext;" />
+          <span id="snapSpinner" class="spinner hidden" aria-hidden="true"></span>
+        </div>
+        <div id="snapOutput" class="results"></div>
+      `;
+      results.innerHTML = actions;
+      const btnCount = document.getElementById('btnSnapCount');
+      const btnView = document.getElementById('btnSnapView');
+      const btnExport = document.getElementById('btnSnapExport');
+      const maxRowsEl = document.getElementById('snapMaxRows');
+      const snapSpinner = document.getElementById('snapSpinner');
+      const out = document.getElementById('snapOutput');
+
+      function setBusy(on) {
+        snapSpinner.classList.toggle('hidden', !on);
+        btnCount.disabled = !!on;
+        btnView.disabled = !!on;
+        btnExport.disabled = btnExport.disabled || !!on; // keep disabled if no data yet
+      }
+
+      function getMaxRows() {
+        const v = parseInt(maxRowsEl.value, 10);
+        return Number.isFinite(v) && v > 0 ? v : 500;
+      }
+
+      // Reset last data for export
+      window.__lastSnapshotData = null;
+
+      btnCount.addEventListener('click', async () => {
+        const base = `SELECT COUNT(*) AS CNT FROM ${spec.table} ${spec.alias}`;
+        const sql = spec.where ? `${base} WHERE ${spec.where}` : base;
+        updateSqlPanel(sql, spec.params);
+        setBusy(true);
+        out.innerHTML = '<div class="note">Running count...</div>';
+        try {
+          const resp = await fetch(ORACLE_ENDPOINT, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sql, params: spec.params, maxRows: 1 })
+          });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || 'Count failed');
+          const idx = (data.columns || []).indexOf('CNT');
+          const cnt = idx >= 0 && (data.rows || [])[0] ? (data.rows[0][idx]) : 0;
+          out.innerHTML = `<div class="metric">No of records: ${cnt}</div>`;
+          window.__lastSnapshotData = null; // no table to export from count
+          btnExport.disabled = true;
+        } catch (e) {
+          console.error('Count error', e);
+          out.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      btnView.addEventListener('click', async () => {
+        const base = `SELECT * FROM ${spec.table} ${spec.alias}`;
+        const sql = spec.where ? `${base} WHERE ${spec.where}` : base;
+        updateSqlPanel(sql, spec.params);
+        setBusy(true);
+        out.innerHTML = '<div class="note">Loading orders...</div>';
+        try {
+          const countSql = `SELECT COUNT(*) AS CNT FROM ${spec.table} ${spec.alias}` + (spec.where ? ` WHERE ${spec.where}` : '');
+
+          const [respCount, respData] = await Promise.all([
+            fetch(ORACLE_ENDPOINT, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 })
+            }),
+            fetch(ORACLE_ENDPOINT, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sql, params: spec.params, maxRows: getMaxRows() })
+            })
+          ]);
+
+          const dataCount = await respCount.json();
+          const data = await respData.json();
+          if (!respData.ok) throw new Error(data.error || 'Query failed');
+          if (!respCount.ok) throw new Error(dataCount.error || 'Count failed');
+
+          const idxCnt = (dataCount.columns || []).indexOf('CNT');
+          const totalCnt = idxCnt >= 0 && (dataCount.rows || [])[0] ? (dataCount.rows[0][idxCnt]) : 0;
+
+          const rows = data.rows || [];
+          const cols = data.columns || [];
+          const count = rows.length;
+          const max = getMaxRows();
+          const limitNote = count >= max ? ` (displayed ${max} max)` : '';
+
+          out.innerHTML = `<div class="metric">No of records: ${totalCnt}</div>` +
+            `<div class=\"metric\">Rows returned: ${count}${limitNote}</div>` +
+            buildTableHtml(cols, rows);
+
+          // Save for export
+          window.__lastSnapshotData = { columns: cols, rows: rows };
+          btnExport.disabled = count === 0;
+        } catch (e) {
+          console.error('View error', e);
+          out.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      // Delegate CASEID button clicks to show joined details by CARTID
+      out.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.case-btn');
+        if (!btn) return;
+        const cartid = btn.getAttribute('data-cartid') || '';
+        if (!cartid) { alert('CARTID not available for this row.'); return; }
+        btn.disabled = true;
+        openModal('Case Details', '<div class="note">Loading details... <span class="spinner"></span></div>');
+        try {
+          const sql = `SELECT 
+    sub.cartid As CARTID, 
+    conf.ordernumber as OrderNumber,
+    conf.locationcode as LocationCode,
+    sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
+    conf.WORKOBJECTSTATUS as ORDER_WORKOBJECTSTATUS,
+    line.WORKOBJECTSTATUS as LINE_WORKOBJECTSTATUS,
+    sub.PYSTATUSWORK as CART_PYSTATUSWORK,
+    conf.PYSTATUSWORK as ORDER_PYSTATUSWORK,
+    line.PYSTATUSWORK as LINE_PYSTATUSWORK,
+    sub.caseid As CART_CASEID, 
+    conf.caseid AS Order_Caseid,
+    line.caseid As Line_Caseid,
+    line.cartid as Line_CARTID,
+    line.ordernumber as LINE_OrderNumber,
+    line.locationcode as LINE_LOCATIONCODE,
+    conf.mtn as ORDER_MTN,    
+    line.mtn as LINE_MTN,
+    sub.PXCREATEDATETIME as CART_PXCREATEDATETIME,
+    conf.PXCREATEDATETIME as ORDER_PXCREATEDATETIME,
+    line.PXCREATEDATETIME as LINE_PXCREATEDATETIME,
+    line.MON as LINE_MON,
+    sub.ACCOUNTNUMBER as CART_ACCOUNTNUMBER
+FROM POJO_data.vzcm_data_ordersubmitentity sub
+LEFT JOIN POJO_data.vzcm_data_orderconfirmationentity conf 
+    ON sub.cartid = conf.cartid
+LEFT JOIN POJO_data.vzcm_data_lineentity line 
+    ON conf.cartid = line.cartid 
+    AND conf.ordernumber = line.ordernumber
+WHERE sub.cartid = :cartid
+FETCH FIRST 1 ROWS ONLY`;
+          const res = await oracleQuery(sql, { cartid }, 1);
+          const html = buildVerticalListHtml(res.columns || [], res.rows || []);
+          document.getElementById('detailModalContent').innerHTML = html;
+        } catch (err) {
+          console.error('Case detail error', err);
+          document.getElementById('detailModalContent').innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      btnExport.addEventListener('click', () => {
+        try {
+          const d = window.__lastSnapshotData;
+          if (!d || !d.columns || !d.rows) { alert('No data to export.'); return; }
+          const csv = buildCsv(d.columns, d.rows);
+          const fname = `orders_${spec.entity.toLowerCase()}_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+          downloadCsv(fname, csv);
+        } catch (e) {
+          console.error('CSV export error', e);
+          alert('Failed to export CSV.');
+        }
+      });
+    }
+
+    async function populateStatuses(entity, statusSel) {
+      statusSel.innerHTML = '<option value="" disabled selected>Loading...</option>';
+      statusSel.disabled = true;
+      if (!TABLES[entity]) {
+        statusSel.innerHTML = '<option value="" disabled selected>Select status</option>';
+        return;
+      }
+      const options = await getStatuses(entity);
+      setStatusOptions(statusSel, options);
+      statusSel.disabled = false;
+    }
+
+    async function runQuery(entity, status, start, end) {
+      const table = TABLES[entity];
+      if (!table) { alert('Unknown hierarchy.'); return; }
+      let sql;
+      if (entity === 'LINE') {
+        // For LINE hierarchy, pull only from Line entity table (including MTN)
+        sql = `SELECT 
+          line.caseid,
+          line.cartid,
+          line.ordernumber,
+          line.locationcode,
+          line.mtn,
+          line.workobjectstatus,
+          line.CANCELORDER_OR,
+          line.VOIDSAPITEMS_OR,
+          line.VOIDPAYMENT_OR,
+          line.SERVICEONLYACTIVAITION_OR,
+          line.INVENTORYAVAILABLE_OR,
+          line.CHARGESTATUS_OR,
+          line.CLOSELOAN_OR,
+          line.CREATELOAN_OR,
+          line.CANCELLOAN_OR,
+          line.RDB_OR,
+          line.GOAI_OR,
+          line.VOT_OR,
+          line.PERSPAIR_OR,
+          line.EXTENDRESERVATION_OR,
+          line.APPLEPARKORDER_OR,
+          line.APPLECARE_OR,
+          line.EQUIPMENTWARRANTYENTRY_OR,
+          line.SHIPPINGRECEIPT_OR,
+          line.SHIPMENTCONFIRMATIONEMAIL_OR,
+          line.ACTIVATIONSTATUS_OR
+        FROM POJO_data.vzcm_data_lineentity line`;
+      } else if (entity === 'CART') {
+        // CART: only from ordersubmitentity (sub)
+        sql = `SELECT 
+          sub.ORDERACTIVITYTYPE,
+          sub.BIOCATCH_OR,
+          sub.ASSIGNMTN_OR,
+          sub.GENERATEINSTALLMENTSCONTRACTS_OR,
+          sub.PROMOJOURNEYINITATION_OR,
+          sub.REVERSEJOURNEYINITATION_OR,
+          sub.CARTSTATUS_OR,
+          sub.PREORDERWRITE_OR,
+          sub.caseid,
+          sub.cartid,
+          sub.workobjectstatus
+        FROM POJO_data.vzcm_data_ordersubmitentity sub`;
+      } else if (entity === 'ORDER') {
+        // ORDER: only from orderconfirmationentity (conf)
+        sql = `SELECT 
+          conf.ordernumber,
+          conf.locationcode,
+          conf.caseid,
+          conf.workobjectstatus,
+          conf.mtn,
+          conf.SAVESDDDETAILS_OR,
+          conf.MONTANASOIUPDATE_OR,
+          conf.MONTANABILLREFID_OR,
+          conf.MONTANACOMPETITOR_OR,
+          conf.MODIFYCREDIT_OR,
+          conf.SAVEOFFER_OR,
+          conf.COMMITOFFER_OR,
+          conf.SECUREPAY_OR,
+          conf.FRAUDSUBMISSIONTIMESTAMP_OR,
+          conf.CHARGESTATUS_OR,
+          conf.TRADEACCOUNTCHARGE_OR,
+          conf.TRADEGIFTCARD_OR,
+          conf.TRADECREDITSTATUS_OR,
+          conf.CANCELORDER_OR,
+          conf.VOIDSAPITEMS_OR,
+          conf.VOIDPAYMENT_OR,
+          conf.CANCELEMAIL_OR,
+          conf.SUBMITPAYMENT_OR,
+          conf.SUBMITBAPAYMENT_OR,
+          conf.CTOC_OR
+        FROM POJO_data.vzcm_data_orderconfirmationentity conf`;
+      }
+      const params = {};
+      const where = [];
+      // Filter by selected hierarchy alias
+      const alias = entity === 'CART' ? 'sub' : entity === 'ORDER' ? 'conf' : 'line';
+      if (status) { where.push(`${alias}.WORKOBJECTSTATUS = :status`); params['status'] = status; }
+      if (start && end) {
+        where.push(`${alias}.PXCREATEDATETIME BETWEEN TO_TIMESTAMP(:start_ts, 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP(:end_ts, 'YYYY-MM-DD"T"HH24:MI')`);
+        params['start_ts'] = start;
+        params['end_ts'] = end;
+      } else {
+        // Default to last 30 minutes when datetime not selected
+        where.push(`${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - INTERVAL '30' MINUTE`);
+      }
+      if (where.length) { sql += ' WHERE ' + where.join(' AND '); }
+      const MAX_ROWS = 500;
+      try {
+        results.innerHTML = '<div class="note">Running query...</div>';
+        const resp = await fetch(ORACLE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params, maxRows: MAX_ROWS })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Query failed');
+        updateSqlPanel(sql, params);
+        const count = (data.rows || []).length;
+        const limitNote = count >= MAX_ROWS ? ` (displayed ${MAX_ROWS} max)` : '';
+        results.innerHTML = `<div class="note"><strong>No of records:</strong> ${count}${limitNote}</div>`;
+        results.insertAdjacentHTML('beforeend', buildTableHtml(data.columns || [], data.rows || []));
+      } catch (e) {
+        console.error('Query error', e);
+        results.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function renderHierarchyView() {
+      panel.innerHTML = `
+        <div class="hierarchy">
+          <div class="grid">
+            <div class="field">
+              <label for="cartIdInput">CARTID</label>
+              <input id="cartIdInput" type="text" placeholder="Enter CARTID" />
+            </div>
+          </div>
+          <div class="actions">
+            <button id="btnRunHierarchy" type="button">Run</button>
+            <span id="hierSpinner" class="spinner hidden" aria-hidden="true"></span>
+          </div>
+          <div id="hierResults" class="tree"></div>
+        </div>
+      `;
+      results.innerHTML = '';
+
+      const cartIdInput = document.getElementById('cartIdInput');
+      const btnRunHierarchy = document.getElementById('btnRunHierarchy');
+      const hierSpinner = document.getElementById('hierSpinner');
+      const hierResults = document.getElementById('hierResults');
+
+      // Show a helpful placeholder so the div isn't empty
+      hierResults.innerHTML = '<div class="note">Enter CARTID and click Run to view hierarchy.</div>';
+
+      function setHierLoading(on) {
+        hierSpinner.classList.toggle('hidden', !on);
+        btnRunHierarchy.disabled = !!on;
+        cartIdInput.disabled = !!on;
+      }
+
+      btnRunHierarchy.addEventListener('click', async () => {
+        const cartId = (cartIdInput.value || '').trim();
+        if (!cartId) { alert('Please enter CARTID.'); return; }
+        setHierLoading(true);
+        try {
+          await runHierarchy(cartId, hierResults);
+        } finally {
+          setHierLoading(false);
+        }
+      });
+    }
+
+    function buildTableHtml(columns, rows) {
+      if (!columns.length) { return '<div class="note">No columns returned.</div>'; }
+      const upCols = columns.map(c => String(c || '').toUpperCase());
+      const idxCase = upCols.indexOf('CASEID');
+      const idxCart = upCols.indexOf('CARTID');
+      const thead = '<thead><tr>' + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
+      const tbody = '<tbody>' + rows.map(r => {
+        return '<tr>' + r.map((v, i) => {
+          const raw = (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) ? 'N/A' : v;
+          if (i === idxCase && raw !== 'N/A') {
+            const cartVal = idxCart >= 0 ? r[idxCart] : '';
+            const cv = (cartVal === null || cartVal === undefined) ? '' : String(cartVal);
+            return `<td><button class="case-btn" data-cartid="${escapeHtml(cv)}" data-caseid="${escapeHtml(String(raw))}">${escapeHtml(String(raw))}</button></td>`;
+          }
+          return `<td>${escapeHtml(raw)}</td>`;
+        }).join('') + '</tr>';
+      }).join('') + '</tbody>';
+      return `<div class="table-wrap"><table>${thead}${tbody}</table></div>`;
+    }
+
+    function buildVerticalListHtml(columns, rows) {
+      if (!columns.length || !rows.length) {
+        return '<div class="note">No data found.</div>';
+      }
+      const makeKV = (cols, row) => {
+        const pairs = cols.map((c, i) => ({ k: c, v: row[i] }));
+        const inner = pairs.map(p => {
+          const val = (p.v === null || p.v === undefined || (typeof p.v === 'string' && p.v.trim() === '')) ? 'N/A' : p.v;
+          return `<div class="k">${escapeHtml(p.k)}</div><div class="v">${escapeHtml(val)}</div>`;
+        }).join('');
+        return `<div class="kv">${inner}</div>`;
+      };
+      // Show all rows vertically, separated
+      return rows.map(r => `<div>${makeKV(columns, r)}</div>`).join('<hr style="border:none;border-top:1px solid #0002;margin:12px 0;"/>');
+    }
+
+    function buildCsv(columns, rows) {
+      function esc(v) {
+        if (v === null || v === undefined) return '';
+        const s = String(v);
+        if (/[",\n\r]/.test(s)) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      }
+      const header = columns.map(esc).join(',');
+      const body = (rows || []).map(r => r.map(esc).join(',')).join('\n');
+      return header + (body ? ('\n' + body) : '');
+    }
+
+    function downloadCsv(filename, csvText) {
+      const blob = new Blob([csvText], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'export.csv';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function runHierarchy(cartId, container) {
+      container.innerHTML = '<div class="note">Fetching hierarchy...</div>';
+      // Queries
+      const sqlCart = `SELECT CASEID, CARTID, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_ordersubmitentity WHERE CARTID = :cartid`;
+      const sqlOrders = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid`;
+      const sqlLines = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, MTN, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid`;
+
+      async function postQuery(sql, params) {
+        const resp = await fetch(ORACLE_ENDPOINT, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, params, maxRows: 5000 })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || 'Query failed');
+        return data;
+      }
+
+      try {
+        const [cartRes, ordersRes, linesRes] = await Promise.all([
+          postQuery(sqlCart, { cartid: cartId }),
+          postQuery(sqlOrders, { cartid: cartId }),
+          postQuery(sqlLines, { cartid: cartId })
+        ]);
+
+        const cartRows = rowsAsObjects(cartRes);
+        const orderRows = rowsAsObjects(ordersRes);
+        const lineRows = rowsAsObjects(linesRes);
+
+        const treeHtml = buildHierarchyTree(cartId, cartRows, orderRows, lineRows);
+        container.innerHTML = treeHtml;
+        wireCaseLinks(container);
+        wireToggles(container);
+      } catch (e) {
+        console.error('Hierarchy error', e);
+        container.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function rowsAsObjects(result) {
+      const cols = result.columns || [];
+      return (result.rows || []).map(r => {
+        const o = {}; cols.forEach((c, i) => { o[c] = r[i]; }); return o;
+      });
+    }
+
+    function buildHierarchyTree(cartId, cartRows, orderRows, lineRows) {
+      // Index orders by ordernumber+locationcode
+      const ordersByKey = {};
+      for (const o of orderRows) {
+        const key = `${o.ORDERNUMBER||''}||${o.LOCATIONCODE||''}`;
+        (ordersByKey[key] = ordersByKey[key] || []).push(o);
+      }
+      // Index lines by ordernumber+locationcode
+      const linesByKey = {};
+      for (const l of lineRows) {
+        const key = `${l.ORDERNUMBER||''}||${l.LOCATIONCODE||''}`;
+        (linesByKey[key] = linesByKey[key] || []).push(l);
+      }
+
+      const parts = [];
+      parts.push('<div class="tree">');
+      // Root nodes (cart level); show all matching rows if multiple
+      const carts = cartRows.length ? cartRows : [{}];
+      for (const c of carts) {
+        const cartVal = c.CARTID || cartId || '';
+        parts.push(`<div class="node root" data-hier="CART" data-cartid="${escapeHtml(cartVal)}">`);
+        parts.push('<div class="hier-label"><span class="toggle" data-node="root">-</span> <span>Hierarchy: CART</span></div>');
+        parts.push('<div class="kv children">');
+        parts.push(`<div class="k">CASEID</div><div class="v"><a class="case-link" data-case="${escapeHtml(c.CASEID||'')}">${escapeHtml(c.CASEID||'')}</a></div>`);
+        parts.push(`<div class="k">CARTID</div><div class="v">${escapeHtml(c.CARTID||'')}</div>`);
+        parts.push(`<div class="k">PYSTATUSWORK</div><div class="v">${escapeHtml(c.PYSTATUSWORK||'')}</div>`);
+        parts.push(`<div class="k">WORKOBJECTSTATUS</div><div class="v">${escapeHtml(c.WORKOBJECTSTATUS||'')}</div>`);
+        parts.push('</div>');
+
+        // Orders
+        parts.push('<ul>');
+        const orderKeys = Object.keys(ordersByKey);
+        if (orderKeys.length === 0) {
+          parts.push('<li><div class="note">No orders found for this CARTID.</div></li>');
+        }
+        for (const k of orderKeys) {
+          const orders = ordersByKey[k];
+          for (const o of orders) {
+            parts.push('<li>');
+            const ordNum = o.ORDERNUMBER || '';
+            const loc = o.LOCATIONCODE || '';
+            parts.push(`<div class="node order collapsed" data-hier="ORDER" data-cartid="${escapeHtml(cartVal)}" data-ordernumber="${escapeHtml(ordNum)}" data-locationcode="${escapeHtml(loc)}">`);
+            parts.push('<div class="hier-label"><span class="toggle" data-node="order">+</span> <span>Hierarchy: ORDER</span></div>');
+            parts.push('<div class="kv children">');
+            parts.push(`<div class="k">CASEID</div><div class="v"><a class="case-link" data-case="${escapeHtml(o.CASEID||'')}">${escapeHtml(o.CASEID||'')}</a></div>`);
+            parts.push(`<div class="k">ORDERNUMBER</div><div class="v">${escapeHtml(o.ORDERNUMBER||'')}</div>`);
+            parts.push(`<div class="k">LOCATIONCODE</div><div class="v">${escapeHtml(o.LOCATIONCODE||'')}</div>`);
+            parts.push(`<div class="k">PYSTATUSWORK</div><div class="v">${escapeHtml(o.PYSTATUSWORK||'')}</div>`);
+            parts.push(`<div class="k">WORKOBJECTSTATUS</div><div class="v">${escapeHtml(o.WORKOBJECTSTATUS||'')}</div>`);
+            parts.push('</div>');
+
+            // Lines for this order
+            const lines = linesByKey[k] || [];
+            parts.push('<ul>');
+            if (lines.length === 0) {
+              parts.push('<li><div class="note">No lines for this order.</div></li>');
+            }
+            for (const ln of lines) {
+              parts.push('<li>');
+              const lOrd = ln.ORDERNUMBER || ordNum || '';
+              const lLoc = ln.LOCATIONCODE || loc || '';
+              parts.push(`<div class="node line collapsed" data-hier="LINE" data-cartid="${escapeHtml(cartVal)}" data-ordernumber="${escapeHtml(lOrd)}" data-locationcode="${escapeHtml(lLoc)}">`);
+              parts.push('<div class="hier-label"><span class="toggle" data-node="line">+</span> <span>Hierarchy: LINE</span></div>');
+              parts.push('<div class="kv children">');
+              parts.push(`<div class="k">CASEID</div><div class="v"><a class="case-link" data-case="${escapeHtml(ln.CASEID||'')}">${escapeHtml(ln.CASEID||'')}</a></div>`);
+              parts.push(`<div class="k">MTN</div><div class="v">${escapeHtml(ln.MTN||'')}</div>`);
+              parts.push(`<div class="k">PYSTATUSWORK</div><div class="v">${escapeHtml(ln.PYSTATUSWORK||'')}</div>`);
+              parts.push(`<div class="k">WORKOBJECTSTATUS</div><div class="v">${escapeHtml(ln.WORKOBJECTSTATUS||'')}</div>`);
+              parts.push('</div>');
+              parts.push('</div>');
+              parts.push('</li>');
+            }
+            parts.push('</ul>');
+
+            parts.push('</div>');
+            parts.push('</li>');
+          }
+        }
+        parts.push('</ul>');
+        parts.push('</div>');
+      }
+      parts.push('</div>');
+      return parts.join('');
+    }
+
+    async function oracleQuery(sql, params, maxRows = 500) {
+      const resp = await fetch(ORACLE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql, params, maxRows })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Query failed');
+      return data;
+    }
+
+    function wireCaseLinks(container) {
+      container.querySelectorAll('.case-link').forEach(a => {
+        a.addEventListener('click', async (e) => {
+          e.preventDefault();
+          const node = a.closest('.node');
+          if (!node) return;
+          const hier = node.getAttribute('data-hier') || '';
+          const cartid = node.getAttribute('data-cartid') || '';
+          const ordernumber = node.getAttribute('data-ordernumber') || '';
+          const locationcode = node.getAttribute('data-locationcode') || '';
+
+          let title = 'Details';
+          let sql = '';
+          let params = {};
+          try {
+            if (hier === 'LINE') {
+              title = 'Line Details';
+              sql = `SELECT 
+        line.caseid AS LineCaseId,
+        line.PXCREATEDATETIME AS Line_PXCREATEDATETIME,
+        line.PXUPDATEDATETIME AS line_PXUPDATEDATETIME,
+        line.WORKOBJECTSTATUS as line_WORKOBJECTSTATUS,
+        line.mtn,
+        line.CANCELORDER_OR,
+        line.VOIDSAPITEMS_OR,
+        line.VOIDPAYMENT_OR,
+        line.SERVICEONLYACTIVAITION_OR,
+        line.INVENTORYAVAILABLE_OR,
+        line.CHARGESTATUS_OR,
+        line.CLOSELOAN_OR,
+        line.CREATELOAN_OR,
+        line.CANCELLOAN_OR,
+        line.RDB_OR,
+        line.GOAI_OR,
+        line.VOT_OR,
+        line.PERSPAIR_OR,
+        line.EXTENDRESERVATION_OR,
+        line.APPLEPARKORDER_OR,
+        line.APPLECARE_OR,
+        line.EQUIPMENTWARRANTYENTRY_OR,
+        line.SHIPPINGRECEIPT_OR,
+        line.SHIPMENTCONFIRMATIONEMAIL_OR,
+        line.ACTIVATIONSTATUS_OR 
+      FROM POJO_data.vzcm_data_lineentity line 
+      WHERE line.cartid = :cartid AND line.ordernumber = :ordernumber AND line.locationcode = :locationcode`;
+              params = { cartid, ordernumber, locationcode };
+            } else if (hier === 'ORDER') {
+              title = 'Order Details';
+              sql = `SELECT 
+         conf.caseid  AS OrderConfirmationCaseId,
+         conf.PXCREATEDATETIME AS OC_PXCREATEDATETIME,
+         conf.WORKOBJECTSTATUS as OrderConfirmation_WORKOBJECTSTATUS,
+         conf.ordernumber,
+         conf.locationcode,
+         conf.SAVESDDDETAILS_OR,
+        conf.MONTANASOIUPDATE_OR,
+        conf.MONTANABILLREFID_OR,
+        conf.MONTANACOMPETITOR_OR,
+        conf.MODIFYCREDIT_OR,
+        conf.SAVEOFFER_OR,
+        conf.COMMITOFFER_OR,
+        conf.SECUREPAY_OR,
+        conf.FRAUDSUBMISSIONTIMESTAMP_OR,
+        conf.CHARGESTATUS_OR,
+        conf.TRADEACCOUNTCHARGE_OR,
+        conf.TRADEGIFTCARD_OR,
+        conf.TRADECREDITSTATUS_OR,
+        conf.CANCELORDER_OR,
+        conf.VOIDSAPITEMS_OR,
+        conf.VOIDPAYMENT_OR,
+        conf.CANCELEMAIL_OR,
+        conf.SUBMITPAYMENT_OR,
+        conf.SUBMITBAPAYMENT_OR,
+        conf.CTOC_OR 
+      FROM POJO_data.vzcm_data_orderconfirmationentity conf
+      WHERE conf.cartid = :cartid AND conf.ordernumber = :ordernumber AND conf.locationcode = :locationcode`;
+              params = { cartid, ordernumber, locationcode };
+            } else if (hier === 'CART') {
+              title = 'Cart Details';
+              sql = `SELECT 
+        sub.caseid AS OrderSubmitCaseId,     
+        sub.cartid,
+        sub.PXCREATEDATETIME AS OS_PXCREATEDATETIME,         
+        sub.WORKOBJECTSTATUS as OrderSubmit_WORKOBJECTSTATUS,         
+        sub.ORDERACTIVITYTYPE,
+        sub.BIOCATCH_OR,
+        sub.ASSIGNMTN_OR,
+        sub.GENERATEINSTALLMENTSCONTRACTS_OR,
+        sub.PROMOJOURNEYINITATION_OR,
+        sub.REVERSEJOURNEYINITATION_OR,
+        sub.CARTSTATUS_OR,
+        sub.PREORDERWRITE_OR         
+      FROM POJO_data.vzcm_data_ordersubmitentity sub
+      WHERE sub.cartid = :cartid`;
+              params = { cartid };
+            } else {
+              return; // Unknown hierarchy
+            }
+
+            openModal(title, '<div class="note">Loading...</div>');
+            const res = await oracleQuery(sql, params, 500);
+            const html = buildVerticalListHtml(res.columns || [], res.rows || []);
+            document.getElementById('detailModalContent').innerHTML = html;
+          } catch (err) {
+            console.error('Detail fetch error', err);
+            openModal('Error', `<div class="error">${escapeHtml(err.message)}</div>`);
+          }
+        });
+      });
+    }
+
+    function wireToggles(container) {
+      container.querySelectorAll('.node .toggle').forEach(t => {
+        t.addEventListener('click', () => {
+          const node = t.closest('.node');
+          if (!node) return;
+          const wasCollapsed = node.classList.toggle('collapsed');
+          t.textContent = wasCollapsed ? '+' : '-';
+        });
+      });
+    }
+
+    btnOrderSnapshots.addEventListener('click', () => {
+      renderSnapshotsForm();
+    });
+
+    btnViewHierarchy.addEventListener('click', () => {
+      renderHierarchyView();
+    });
+
+    // Default view
+    renderSnapshotsForm();
+  </script>
+</body>
+</html>

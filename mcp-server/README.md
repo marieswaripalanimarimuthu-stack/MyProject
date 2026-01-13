@@ -32,6 +32,24 @@ python -m mcp_server
 ```
 Server starts on `http://127.0.0.1:8765`.
 
+## Oracle Connection
+- Ensure dependencies:
+	- `pip install -r mcp-server/requirements.txt`
+- Set environment variables in PowerShell:
+```
+$env:ORACLE_DSN = "tpalpbrhvd00-scan.verizon.com:1532/couser_srv01"
+$env:ORACLE_USER = "Tier_Ops"
+$env:ORACLE_PASSWORD = "<your_password>"
+```
+- Smoke test the connection:
+```
+cd c:\Users\v776133\Downloads\JiraAgent\mcp-server
+./smoke_oracle.ps1
+```
+- Use the server endpoint to run read-only queries:
+	- Start the server after setting the env vars: `python -m mcp_server`
+	- Then POST to `http://127.0.0.1:8765/oracle/query` with JSON `{ "sql": "select 1 from dual" }`.
+
 ## Endpoint
 - `GET /jira/issues?project=<KEY>&maxResults=<N>`
 
