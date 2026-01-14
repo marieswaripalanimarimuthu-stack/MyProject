@@ -329,6 +329,30 @@
       document.getElementById('detailModalClose').addEventListener('click', closeModal);
       backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
     })();
+    function showToast(message) {
+      try {
+        let el = document.getElementById('toast');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'toast';
+          el.style.position = 'fixed';
+          el.style.bottom = '16px';
+          el.style.right = '16px';
+          el.style.background = '#333';
+          el.style.color = '#fff';
+          el.style.padding = '8px 12px';
+          el.style.borderRadius = '6px';
+          el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+          el.style.zIndex = '2000';
+          el.style.opacity = '0';
+          el.style.transition = 'opacity .2s';
+          document.body.appendChild(el);
+        }
+        el.textContent = message || 'Copied';
+        el.style.opacity = '1';
+        setTimeout(() => { el.style.opacity = '0'; }, 2000);
+      } catch {}
+    }
 
     function renderSnapshotsForm() {
       panel.innerHTML = `
@@ -380,12 +404,8 @@
           <div class="actions" style="margin-top:8px;">
             <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
           </div>
-          <div class="note"><strong>SQL</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
-          <div class="note"><strong>Time taken (s)</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration"></code></pre>
-          <div class="note"><strong>Parameters</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+          <div class="note" style="color:#8B0000;font-weight:700;"><strong>Time taken (s)</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration" style="color:#8B0000;font-weight:700;"></code></pre>
           <div class="note"><strong>Preview with values</strong> (display only)</div>
           <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
         </div>
@@ -472,8 +492,11 @@
       });
 
       btnCopySql.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
-        catch(e) { console.error('Copy failed', e); }
+        try {
+          const preview = previewBoundSql(lastSql, lastParams) || '';
+          await navigator.clipboard.writeText(preview);
+          showToast('SQL preview copied');
+        } catch(e) { console.error('Copy failed', e); }
       });
     }
 
@@ -624,10 +647,8 @@
           const cols = data.columns || [];
           const count = rows.length;
           const max = getMaxRows();
-          const limitNote = count >= max ? ` (displayed ${max} max)` : '';
-
           out.innerHTML = `<div class="metric">No of records: ${totalCnt}</div>` +
-            `<div class=\"metric\">Rows returned: ${count}${limitNote}</div>` +
+            `<div class=\"metric\">Rows returned: ${count}</div>` +
             buildTableHtml(cols, rows);
 
           // Save for export
@@ -852,18 +873,8 @@ FETCH FIRST 1 ROWS ONLY`;
             <div class="actions" style="margin-top:8px;">
               <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
             </div>
-            <div class="note"><strong>SQL</strong> (CART, ORDER, LINE)</div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
-            <div class="note"><strong>Time taken (s) — Total wall time</strong></div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationTotal"></code></pre>
-            <div class="note"><strong>CART</strong></div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationCart"></code></pre>
-            <div class="note"><strong>ORDER</strong></div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationOrder"></code></pre>
-            <div class="note"><strong>LINE</strong></div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationLine"></code></pre>
-            <div class="note"><strong>Parameters</strong></div>
-            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+            <div class="note" style="color:#8B0000;font-weight:700;"><strong>Time taken (s)</strong></div>
+            <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDurationTotal" style="color:#8B0000;font-weight:700;"></code></pre>
             <div class="note"><strong>Preview with values</strong> (display only)</div>
             <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
           </div>
@@ -954,8 +965,11 @@ FETCH FIRST 1 ROWS ONLY`;
       });
 
       btnCopySql.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
-        catch(e) { console.error('Copy failed', e); }
+        try {
+          const preview = previewBoundSql(lastSql, lastParams) || '';
+          await navigator.clipboard.writeText(preview);
+          showToast('SQL preview copied');
+        } catch(e) { console.error('Copy failed', e); }
       });
     }
 

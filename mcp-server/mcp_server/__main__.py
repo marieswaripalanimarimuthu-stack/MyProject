@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from base64 import b64encode
@@ -35,10 +36,11 @@ CONFLUENCE_BASE_URL = os.environ.get("CONFLUENCE_BASE_URL", "")
 CONFLUENCE_USERNAME = os.environ.get("CONFLUENCE_USERNAME", os.environ.get("CONFLUENCE_EMAIL", ""))
 CONFLUENCE_TOKEN = os.environ.get("CONFLUENCE_TOKEN", "")
 CONFLUENCE_DEFAULT_SPACES = [s.strip() for s in (os.environ.get("CONFLUENCE_SPACE_KEYS", "").split(",")) if s.strip()]
-
 # Release Plan configuration
 RELEASE_PLAN_URL = os.environ.get("RELEASE_PLAN_URL", "https://releaseplan.ebiz.verizon.com/")
 
+# Release Plan configuration
+                    # Convert params keys to str and pass as dict for named binds
 # Oracle configuration (optional, for Queue Snapshot and status lookup)
 ORACLE_DSN = os.environ.get("ORACLE_DSN", os.environ.get("ORACLE_CONNECT_STRING", ""))
 ORACLE_USER = os.environ.get("ORACLE_USER", "")
@@ -1869,22 +1871,36 @@ class Handler(BaseHTTPRequestHandler):
                 if not (ORACLE_DSN and ORACLE_USER and ORACLE_PASSWORD):
                     self._json(500, {"error": "Oracle env not set. Provide ORACLE_DSN, ORACLE_USER, ORACLE_PASSWORD"})
                     return
+                # Prepare binds and log incoming request to terminal
+                bind_params = {str(k): v for k, v in (params.items() if isinstance(params, dict) else {})}
+                preview_sql = sql if len(sql) <= 800 else (sql[:800] + "...")
+                print(f"[MCP Server] /oracle/query incoming: maxRows={max_rows} | params={bind_params!r}\nSQL: {preview_sql}")
                 # Connect and run
                 conn = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=ORACLE_DSN)
                 try:
                     cur = conn.cursor()
-                    # Convert params keys to str and pass as dict for named binds
-                    bind_params = {str(k): v for k, v in (params.items() if isinstance(params, dict) else {})}
+                    # Tune fetch settings for better performance
+                    try:
+                        cur.arraysize = max(100, min(max_rows, 1000))
+                    except Exception:
+                        pass
+                    try:
+                        cur.prefetchrows = max(100, min(max_rows, 1000))
+                    except Exception:
+                        pass
+                    t0 = time.time()
                     cur.execute(sql, bind_params)
+                    t1 = time.time()
                     # Fetch description and rows
                     cols = [d[0] for d in (cur.description or [])]
-                    rows = []
-                    count = 0
-                    for r in cur:
-                        rows.append([None if v is None else (v.isoformat() if hasattr(v, 'isoformat') else v) for v in r])
-                        count += 1
-                        if count >= max_rows:
-                            break
+                    rows_raw = cur.fetchmany(max_rows)
+                    rows = [[None if v is None else (v.isoformat() if hasattr(v, 'isoformat') else v) for v in r] for r in rows_raw]
+                    count = len(rows)
+                    t2 = time.time()
+                    exec_time = t1 - t0
+                    fetch_time = t2 - t1
+                    total_time = t2 - t0
+                    print(f"[MCP Server] /oracle/query ok: rows={count} cols={len(cols)} exec={exec_time:.3f}s fetch={fetch_time:.3f}s total={total_time:.3f}s")
                     self._json(200, {"columns": cols, "rows": rows})
                 finally:
                     try:
@@ -1892,7 +1908,12 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         pass
             except Exception as e:
-                self._json(500, {"error": str(e)})
+                try:
+                    msg = str(e)
+                except Exception:
+                    msg = ""
+                print(f"[MCP Server] /oracle/query error: {msg}")
+                self._json(500, {"error": msg})
             return
         if parsed.path == "/jira/update":
             try:

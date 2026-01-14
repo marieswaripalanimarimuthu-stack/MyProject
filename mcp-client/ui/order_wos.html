@@ -310,14 +310,15 @@
       }
     }
 
-    function buildWosSql(entity, status, start, end, last) {
+    function buildWosSql(entity, status, start, end, last, rowLimit) {
       const params = {};
       let sql = '';
       const alias = entity === 'CART' ? 'sub' : (entity === 'ORDER' ? 'conf' : 'line');
       if (entity === 'LINE') {
         sql = `SELECT 
-    sub.cartid As CARTID, 
-    ful.TRANSACTIONTYPE,
+      sub.cartid As CARTID, 
+      ful.TRANSACTIONTYPE,
+      conf.ORIGINATINGCLIENTID as ORIGINATINGCLIENTID,
     conf.ordernumber as OrderNumber,
     conf.locationcode as LocationCode,
     sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
@@ -351,8 +352,9 @@ WHERE line.WORKOBJECTSTATUS = :status `;
         params['status'] = status || '';
       } else if (entity === 'ORDER') {
         sql = `SELECT 
-    sub.cartid As CARTID, 
-    ful.TRANSACTIONTYPE,
+      sub.cartid As CARTID, 
+      ful.TRANSACTIONTYPE,
+      conf.ORIGINATINGCLIENTID as ORIGINATINGCLIENTID,
     conf.ordernumber as OrderNumber,
     conf.locationcode as LocationCode,
     sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
@@ -385,8 +387,9 @@ WHERE conf.WORKOBJECTSTATUS = :status`;
         params['status'] = status || '';
       } else if (entity === 'CART') {
         sql = `SELECT 
-    sub.cartid As CARTID,
-    ful.TRANSACTIONTYPE, 
+      sub.cartid As CARTID,
+      ful.TRANSACTIONTYPE, 
+      conf.ORIGINATINGCLIENTID as ORIGINATINGCLIENTID,
     conf.ordernumber as OrderNumber,
     conf.locationcode as LocationCode,
     sub.WORKOBJECTSTATUS as CART_WORKOBJECTSTATUS,
@@ -435,7 +438,11 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
           sql += ` AND ${alias}.PXCREATEDATETIME >= SYSTIMESTAMP - INTERVAL '30' MINUTE`;
         }
       }
-      return { sql, params };
+     // sql+=` FETCH FIRST 10 ROWS ONLY`;
+      // Build limited SQL for fast first-rows return
+      const limitNum = Number.isFinite(Number(rowLimit)) ? Math.max(1, parseInt(rowLimit, 10)) : 100;
+      const limitedSql = `${sql} FETCH FIRST ${limitNum} ROWS ONLY`;
+      return { sql, params, limitedSql, rowLimit: limitNum };
     }
 
     function buildVerticalListHtml(columns, rows) {
@@ -451,8 +458,9 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       return rows.map(r => `<div>${makeKV(columns, r)}</div>`).join('<hr style="border:none;border-top:1px solid #0002;margin:12px 0;"/>');
     }
 
-    function buildTableHtml(columns, rows) {
+    function buildTableHtml(columns, rows, opts) {
       if (!columns.length) { return '<div class="note">No columns returned.</div>'; }
+      const clickableCart = !opts || opts.clickableCart !== false;
       const upCols = columns.map(c => String(c || '').toUpperCase());
       const idxCart = upCols.indexOf('CARTID');
       const idxOrd = upCols.indexOf('ORDERNUMBER');
@@ -461,12 +469,13 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       const thead = '<thead><tr>' + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
       const tbody = '<tbody>' + rows.map(r => {
         return '<tr>' + r.map((v, i) => {
-          const raw = (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) ? 'N/A' : v;
-          if (i === idxCart && raw !== 'N/A') {
+          const orig = v;
+          const raw = (orig === null || orig === undefined || (typeof orig === 'string' && orig.trim() === '')) ? 'N/A' : orig;
+          if (i === idxCart && raw !== 'N/A' && clickableCart) {
             const ord = idxOrd >= 0 ? r[idxOrd] : '';
             const loc = idxLoc >= 0 ? r[idxLoc] : '';
             const mtn = idxMtn >= 0 ? r[idxMtn] : '';
-            return `<td><button class="wos-cart-btn" data-cartid="${escapeHtml(String(raw))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">${escapeHtml(String(raw))}</button></td>`;
+            return `<td><button class="wos-cart-btn" data-cartid="${escapeHtml(String(orig||''))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">${escapeHtml(String(raw))}</button></td>`;
           }
           return `<td>${escapeHtml(raw)}</td>`;
         }).join('') + '</tr>';
@@ -524,16 +533,26 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
           <button id="btnSubmit" type="button" disabled>Submit</button>
           <button id="btnToggleSql" class="ghost" type="button">Show SQL</button>
         </div>
+        <div class="grid" style="margin-top:8px;">
+          <div class="field">
+            <label for="rowLimit">Row limit</label>
+            <select id="rowLimit" name="rowLimit">
+              <option value="10">10</option>
+              <option value="50">50</option>
+              <option value="100" selected>100</option>
+              <option value="500">500</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:8px;">
+          <button id="btnExport" type="button" class="secondary" disabled>Export CSV</button>
+        </div>
         <div id="sqlPanel" class="hidden">
           <div class="actions" style="margin-top:8px;">
             <button id="btnCopySql" type="button" class="secondary">Copy SQL</button>
           </div>
-          <div class="note"><strong>SQL</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlText"></code></pre>
-          <div class="note"><strong>Time taken (s)</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration"></code></pre>
-          <div class="note"><strong>Parameters</strong></div>
-          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlParams"></code></pre>
+          <div class="note" style="color:#8B0000;font-weight:700;"><strong>Time taken (s)</strong></div>
+          <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlDuration" style="color:#8B0000;font-weight:700;"></code></pre>
           <div class="note"><strong>Preview with values</strong> (display only)</div>
           <pre style="white-space:pre-wrap;word-wrap:break-word;"><code id="sqlPreview"></code></pre>
         </div>
@@ -557,6 +576,8 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       const btnToggleSql = document.getElementById('btnToggleSql');
       const sqlPanel = document.getElementById('sqlPanel');
       const btnCopySql = document.getElementById('btnCopySql');
+      const rowLimitSel = document.getElementById('rowLimit');
+      const btnExport = document.getElementById('btnExport');
       const btnLoadAllStatuses = document.getElementById('btnLoadAllStatuses');
       const btnCopyAllStatuses = document.getElementById('btnCopyAllStatuses');
       const dumpSpinner = document.getElementById('dumpSpinner');
@@ -598,8 +619,11 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       });
 
       btnCopySql.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(lastSql || ''); alert('SQL copied to clipboard'); }
-        catch(e) { console.error('Copy failed', e); }
+        try {
+          const preview = previewBoundSql(lastSql, lastParams) || '';
+          await navigator.clipboard.writeText(preview);
+          showToast('SQL preview copied');
+        } catch(e) { console.error('Copy failed', e); }
       });
 
       btnLoadAllStatuses.addEventListener('click', async () => {
@@ -642,6 +666,7 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
         const start = document.getElementById('startDateTime').value;
         const end = document.getElementById('endDateTime').value;
         const last = document.getElementById('lastRange').value;
+        const rowLimit = rowLimitSel ? rowLimitSel.value : '100';
         if (!entity) { alert('Please select Hierarchy.'); return; }
         if (!status) { alert('Please select WorkObjectStatus.'); return; }
         if (start && end && new Date(start) > new Date(end)) { alert('Start must be before End.'); return; }
@@ -649,32 +674,44 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
         entitySel.disabled = true; statusSel.disabled = true; btnSubmit.disabled = true;
         results.innerHTML = '<div class="note">Running query...</div>';
         try {
-          const spec = buildWosSql(entity, status, start, end, last);
-          // Auto-show SQL panel with the current query immediately
-          sqlPanel.classList.remove('hidden');
-          btnToggleSql.textContent = 'Hide SQL';
-          updateSqlPanel(spec.sql, spec.params, {});
-          // Run count and data concurrently to show exact count
-          const countSql = `SELECT COUNT(*) AS CNT FROM (${spec.sql}) t`;
+          const spec = buildWosSql(entity, status, start, end, last, rowLimit);
+          // Prepare SQL panel content without showing it (show limited SQL)
+          updateSqlPanel(spec.limitedSql, spec.params, {});
+          // Run data query first with FETCH FIRST and maxRows = rowLimit
           const t0 = (window.performance && performance.now) ? performance.now() : Date.now();
-          const pCount = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 }) })
-            .then(r => r.json().then(j => ({ ok: r.ok, data: j })));
-          const pData = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: spec.sql, params: spec.params, maxRows: 500 }) })
-            .then(r => r.json().then(j => ({ ok: r.ok, data: j })));
-          const [countRes, dataRes] = await Promise.all([pCount, pData]);
-          if (!countRes.ok) throw new Error(countRes.data.error || 'Count failed');
-          if (!dataRes.ok) throw new Error(dataRes.data.error || 'Query failed');
+          const dataRes = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: spec.limitedSql, params: spec.params, maxRows: spec.rowLimit }) });
+          const data = await dataRes.json();
+          if (!dataRes.ok) throw new Error(data.error || 'Query failed');
           const t1 = (window.performance && performance.now) ? performance.now() : Date.now();
-          updateSqlPanel(spec.sql, spec.params, { durationMs: t1 - t0 });
-          const rows = dataRes.data.rows || [];
-          const cols = dataRes.data.columns || [];
-          const idxCnt = (countRes.data.columns || []).indexOf('CNT');
-          const totalCnt = idxCnt >= 0 && (countRes.data.rows || [])[0] ? (countRes.data.rows[0][idxCnt]) : rows.length;
+          updateSqlPanel(spec.limitedSql, spec.params, { durationMs: t1 - t0 });
+          const rows = data.rows || [];
+          const cols = data.columns || [];
           const heading = status ? `Order Status: ${escapeHtml(status)}` : 'Results';
           results.innerHTML = `
             <div class="metric">${heading}</div>
-            <div class="metric">No of records: ${totalCnt}</div>
+            <div class="metric">No of records: <span id="totalCount">calculating...</span></div>
+            <div class="metric">Rows returned: ${rows.length}</div>
           ` + buildTableHtml(cols, rows);
+          // Save for export and enable button
+          window.__lastWosData = { columns: cols, rows: rows };
+          btnExport.disabled = rows.length === 0;
+          // Fire exact count in background and update when ready
+          (async () => {
+            try {
+              const countSql = `SELECT COUNT(*) AS CNT FROM (${spec.sql}) t`;
+              const countRes = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: countSql, params: spec.params, maxRows: 1 }) });
+              const countData = await countRes.json();
+              if (!countRes.ok) throw new Error(countData.error || 'Count failed');
+              const idxCnt = (countData.columns || []).indexOf('CNT');
+              const totalCnt = idxCnt >= 0 && (countData.rows || [])[0] ? (countData.rows[0][idxCnt]) : rows.length;
+              const el = document.getElementById('totalCount');
+              if (el) el.textContent = String(totalCnt);
+            } catch (e) {
+              console.error('Background count failed', e);
+              const el = document.getElementById('totalCount');
+              if (el) el.textContent = 'error';
+            }
+          })();
           // Wire cart button clicks for history pop-up
           results.addEventListener('click', async (e) => {
             const btn = e.target.closest('.wos-cart-btn');
@@ -686,9 +723,62 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
             btn.disabled = true;
             try {
               openModal('Order History', '<div class="note">Loading history... <span class="spinner"></span></div>');
+              const tH0 = (window.performance && performance.now) ? performance.now() : Date.now();
               const hist = await fetchOrderHistory(cartid, ordernumber, locationcode, mtn);
+              const tH1 = (window.performance && performance.now) ? performance.now() : Date.now();
+              const secs = ((tH1 - tH0) / 1000).toFixed(3);
               const contentEl = document.getElementById('detailModalContent');
-              contentEl.innerHTML = buildTableHtml(hist.columns || [], hist.rows || []);
+              const safe = (v) => { const s = String(v || '').trim(); return s ? escapeHtml(s) : 'N/A'; };
+              const headerHtml = `
+                <div class="kv" style="margin-bottom:8px;">
+                  <div class="k">Time taken (s)</div><div style="color:#8B0000;font-weight:700;">${secs}</div>
+                  <div class="k">CARTID</div><div>${safe(cartid)}</div>
+                  <div class="k">ORDERNUMBER</div><div>${safe(ordernumber)}</div>
+                  <div class="k">LOCATIONCODE</div><div>${safe(locationcode)}</div>
+                  <div class="k">MTN</div><div>${safe(mtn)}</div>
+                </div>`;
+              // Build filter UI and table container
+              const cols = (hist.columns || []);
+              const rows = (hist.rows || []);
+              const filterHtml = `
+                <div class="grid" style="margin-bottom:8px;">
+                  <div class="field">
+                    <label for="histFilterCol">Filter column</label>
+                    <select id="histFilterCol">${cols.map((c,i)=>`<option value="${i}">${escapeHtml(String(c))}</option>`).join('')}</select>
+                  </div>
+                  <div class="field">
+                    <label for="histFilterText">Contains</label>
+                    <input id="histFilterText" type="text" placeholder="Type to filter" />
+                  </div>
+                  <div class="field">
+                    <label class="sr-only" for="histFilterClear">Clear</label>
+                    <button id="histFilterClear" type="button" class="ghost" style="margin-top:22px;">Clear</button>
+                  </div>
+                </div>
+                <div id="histTableContainer"></div>`;
+              contentEl.innerHTML = headerHtml + filterHtml;
+              const container = document.getElementById('histTableContainer');
+              const render = (filteredRows) => { container.innerHTML = buildTableHtml(cols, filteredRows, { clickableCart: false }); };
+              render(rows);
+              const sel = document.getElementById('histFilterCol');
+              const inp = document.getElementById('histFilterText');
+              const clr = document.getElementById('histFilterClear');
+              function applyFilter() {
+                const idx = parseInt(sel.value, 10) || 0;
+                const q = (inp.value || '').toLowerCase();
+                if (!q) { render(rows); return; }
+                const fr = rows.filter(r => {
+                  try {
+                    const v = r[idx];
+                    const s = (v === null || v === undefined) ? '' : String(v).toLowerCase();
+                    return s.includes(q);
+                  } catch { return false; }
+                });
+                render(fr);
+              }
+              sel.addEventListener('change', applyFilter);
+              inp.addEventListener('input', applyFilter);
+              clr.addEventListener('click', () => { inp.value = ''; applyFilter(); });
             } catch(err) {
               console.error('Order history error', err);
               const contentEl = document.getElementById('detailModalContent');
@@ -700,9 +790,22 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
         } catch (e) {
           console.error('WOS error', e);
           results.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
+          btnExport.disabled = true;
         } finally {
           entitySel.disabled = false; btnSubmit.disabled = false; /* keep status disabled post-submit? not required here */
         }
+      });
+
+      btnExport.addEventListener('click', () => {
+        try {
+          const d = window.__lastWosData;
+          if (!d || !d.columns || !d.rows) { showToast('No data to export'); return; }
+          const csv = buildCsv(d.columns, d.rows);
+          const entity = entitySel.value || 'wos';
+          const fname = `wos_${String(entity).toLowerCase()}_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+          downloadCsv(fname, csv);
+          showToast('CSV downloaded');
+        } catch (e) { console.error('Export failed', e); }
       });
 
       // Prefetch status lists silently for all hierarchies
@@ -742,20 +845,18 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
     // Optional: render the form on load for convenience
     // renderWosForm();
     async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn) {
-      const whereParts = [];
       const params = {};
-      if (cartid && cartid.trim()) { whereParts.push('sub.cartid = :cartid'); params.cartid = cartid; }
-      if (ordernumber && locationcode && ordernumber.trim() && locationcode.trim()) { whereParts.push('(sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)'); params.ordernumber = ordernumber; params.locationcode = locationcode; }
-      if (mtn && mtn.trim()) { whereParts.push('sub.mtn = :mtn'); params.mtn = mtn; }
+      const selects = [];
+      const cols = `HIERARCHY, ENTITY, ENTITYSTEP, WORKOBJECTSTATUS, PYSTATUSWORK, entitystepstatus, ENTITYSTEPTYPE, CREATEDATETIME, PROCESSSTEP, PROCESSACTION, MON, ACCOUNTNUMBER`;
+      const base = `SELECT ${cols} FROM POJO_data.vzcm_data_orderhistory sub WHERE`;
+      const isNA = (v) => !v || !String(v).trim() || String(v).trim().toUpperCase() === 'N/A';
+      if (!isNA(cartid)) { params.cartid = String(cartid).trim(); selects.push(`${base} sub.cartid = :cartid`); }
+      if (!isNA(ordernumber) && !isNA(locationcode)) { params.ordernumber = String(ordernumber).trim(); params.locationcode = String(locationcode).trim(); selects.push(`${base} (sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)`); }
+      if (!isNA(mtn)) { params.mtn = String(mtn).trim(); selects.push(`${base} sub.mtn = :mtn`); }
       // Fallback: if no keys provided, return empty
-      if (whereParts.length === 0) {
-        return { columns: [], rows: [] };
-      }
-      const sql = `SELECT 
-    HIERARCHY, ENTITY, ENTITYSTEP, WORKOBJECTSTATUS, PYSTATUSWORK, entitystepstatus, ENTITYSTEPTYPE, CREATEDATETIME, PROCESSSTEP, PROCESSACTION, MON, ACCOUNTNUMBER 
-  FROM POJO_data.vzcm_data_orderhistory sub 
-  WHERE ${whereParts.join(' OR ')}
-  ORDER BY CREATEDATETIME DESC`;
+      if (selects.length === 0) { return { columns: [], rows: [] }; }
+      const sql = `${selects.join(' UNION ALL ')} ORDER BY CREATEDATETIME DESC`;
+      console.log('History SQL:', sql, params);
       const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 500 }) });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error || 'History query failed');
@@ -777,6 +878,55 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       backdrop.style.display = 'none';
       backdrop.setAttribute('aria-hidden', 'true');
       contentEl.innerHTML = '';
+    }
+    function buildCsv(columns, rows) {
+      try {
+        const escape = (v) => {
+          const s = v === null || v === undefined ? '' : String(v);
+          const needs = /[",\n]/.test(s);
+          const esc = s.replace(/"/g, '""');
+          return needs ? `"${esc}"` : esc;
+        };
+        const header = (columns || []).map(c => escape(c)).join(',');
+        const body = (rows || []).map(r => (r || []).map(v => escape(v)).join(',')).join('\n');
+        return header + '\n' + body;
+      } catch (e) { console.error('CSV build error', e); return ''; }
+    }
+    function downloadCsv(fname, csv) {
+      try {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fname || 'data.csv';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+      } catch (e) { console.error('CSV download error', e); }
+    }
+    function showToast(message) {
+      try {
+        let el = document.getElementById('toast');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = 'toast';
+          el.style.position = 'fixed';
+          el.style.bottom = '16px';
+          el.style.right = '16px';
+          el.style.background = '#333';
+          el.style.color = '#fff';
+          el.style.padding = '8px 12px';
+          el.style.borderRadius = '6px';
+          el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+          el.style.zIndex = '2000';
+          el.style.opacity = '0';
+          el.style.transition = 'opacity .2s';
+          document.body.appendChild(el);
+        }
+        el.textContent = message || 'Copied';
+        el.style.opacity = '1';
+        setTimeout(() => { el.style.opacity = '0'; }, 2000);
+      } catch {}
     }
     (function initModal() {
       const backdrop = document.getElementById('detailModalBackdrop');
