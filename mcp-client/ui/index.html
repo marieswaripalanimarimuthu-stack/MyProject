@@ -173,6 +173,29 @@
     </div>
     <!-- Release Plan UI removed per request -->
     <div id="results"></div>
+    <hr style="margin:16px 0; border:none; border-top:1px solid #eee;"/>
+    <div id="repoPanel" style="margin-top:12px;">
+      <h2 style="font-size:16px; margin:0 0 8px;">Repository: Commit & Push</h2>
+      <div class="row" style="align-items:end; gap:12px;">
+        <div style="flex:1;">
+          <label for="commitMsg">Commit Message</label>
+          <input id="commitMsg" placeholder="Describe your changes" />
+        </div>
+        <div>
+          <label for="pushGitHub">Push to GitHub</label>
+          <input id="pushGitHub" type="checkbox" checked />
+        </div>
+        <div>
+          <label for="pushGitLab">Push to GitLab</label>
+          <input id="pushGitLab" type="checkbox" />
+        </div>
+        <div style="display:inline-flex; align-items:center; gap:8px;">
+          <button id="btnRepoPush" class="secondary">Commit & Push</button>
+          <span id="repoPushLoader" class="spinner"></span>
+        </div>
+      </div>
+      <div id="repoPushOut" class="muted" style="margin-top:8px; white-space:pre-wrap;"></div>
+    </div>
   </div>
 
   <script>
@@ -417,6 +440,46 @@
       return vals.join(',');
     }
 
+
+    // Repo Commit & Push
+    (function initRepoPush(){
+      const btn = document.getElementById('btnRepoPush');
+      const outEl = document.getElementById('repoPushOut');
+      const loader = document.getElementById('repoPushLoader');
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        try {
+          btn.disabled = true; loader.style.display = 'inline-block'; outEl.textContent = '';
+          const msg = document.getElementById('commitMsg').value || '';
+          const pushGitHub = document.getElementById('pushGitHub').checked;
+          const pushGitLab = document.getElementById('pushGitLab').checked;
+          const res = await fetch(`${SERVER}/repo/push`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ commitMessage: msg, pushGitHub, pushGitLab })
+          });
+          const text = await res.text();
+          if (!res.ok) { outEl.textContent = `Error: ${text}`; return; }
+          const data = JSON.parse(text);
+          const r = data.results || {};
+          function fmt(label, obj) {
+            if (!obj) return '';
+            return `${label} (code ${obj.code}):\n${obj.out || ''}${obj.err ? `\nERR: ${obj.err}` : ''}`.trim();
+          }
+          const lines = [
+            fmt('git add', r.add),
+            fmt('git status', r.status),
+            fmt('git commit', r.commit),
+            fmt('push origin', r.push_origin),
+            fmt('push gitlab', r.push_gitlab)
+          ].filter(Boolean).join('\n\n');
+          outEl.textContent = lines || 'Done.';
+        } catch (e) {
+          outEl.textContent = `Exception: ${e.message || e}`;
+        } finally {
+          btn.disabled = false; loader.style.display = 'none';
+        }
+      });
+    })();
     // Initialize checkbox groups on load (defined outside any click handlers)
     function initOptionGroups() {
       renderCheckboxGroup('statusGroup', STATUS_OPTIONS, 'status');

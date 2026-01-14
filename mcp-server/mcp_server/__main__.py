@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import subprocess
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from base64 import b64encode
@@ -1848,6 +1849,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/repo/push":
+            # Stage, commit, and push repo changes. Body: {commitMessage?, pushGitHub?, pushGitLab?}
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                msg = (payload.get("commitMessage") or "Auto-commit from UI")
+                push_github = bool(payload.get("pushGitHub", True))
+                push_gitlab = bool(payload.get("pushGitLab", False))
+                def run(cmd, cwd=WORKSPACE_ROOT):
+                    print(f"[MCP Server] git cmd: {cmd}")
+                    p = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True)
+                    return {"code": p.returncode, "out": p.stdout, "err": p.stderr}
+                results = {}
+                # Stage all
+                results["add"] = run("git add -A")
+                # Check for changes
+                status = run("git status --porcelain")
+                results["status"] = status
+                if status.get("out", "").strip():
+                    results["commit"] = run(f"git commit -m \"{msg.replace('\\','/').replace('"','\\"')}\"")
+                else:
+                    results["commit"] = {"code": 0, "out": "No changes to commit", "err": ""}
+                # Push to GitHub (origin)
+                if push_github:
+                    results["push_origin"] = run("git push origin main")
+                # Push to GitLab (gitlab remote)
+                if push_gitlab:
+                    results["push_gitlab"] = run("git push gitlab main")
+                self._json(200, {"ok": True, "results": results})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if parsed.path == "/oracle/query":
             # Execute a read-only SELECT with optional named binds and return rows
             try:
