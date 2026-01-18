@@ -1239,6 +1239,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path in ("/preview/healthcheck-email",):
+            # Serve the healthcheck email preview file if present
+            preview_path = os.path.join(WORKSPACE_ROOT, "healthcheck_email_preview.html")
+            if os.path.exists(preview_path):
+                try:
+                    with open(preview_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            else:
+                self._json(404, {"error": "healthcheck_email_preview.html not found"})
+            return
         if parsed.path in ("/reporting.csv", "/Reporting.csv"):
             # Serve the Reporting.csv file content if present
             report_path = os.path.join(WORKSPACE_ROOT, "Reporting.csv")
@@ -1926,6 +1944,14 @@ class Handler(BaseHTTPRequestHandler):
                 raw = self.rfile.read(length) if length > 0 else b"{}"
                 payload = json.loads(raw.decode("utf-8"))
                 to_addr = (payload.get("to") or "").strip()
+                cc_val = payload.get("cc")
+                # cc can be a string comma-separated or a list
+                if isinstance(cc_val, str):
+                    cc_list = [a.strip() for a in cc_val.split(",") if a.strip()]
+                elif isinstance(cc_val, list):
+                    cc_list = [str(a).strip() for a in cc_val if str(a).strip()]
+                else:
+                    cc_list = []
                 subject = (payload.get("subject") or "CJCM Healthcheck").strip()
                 html_body = payload.get("html") or ""
                 SMTP_HOST = os.environ.get("SMTP_HOST", "")
@@ -1933,6 +1959,7 @@ class Handler(BaseHTTPRequestHandler):
                 SMTP_USER = os.environ.get("SMTP_USER", "")
                 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
                 SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER or "")
+                SMTP_TLS = os.environ.get("SMTP_TLS", "auto").lower()  # 'auto' | 'on' | 'off'
                 if not to_addr:
                     self._json(400, {"error": "Missing 'to'"})
                     return
@@ -1945,24 +1972,33 @@ class Handler(BaseHTTPRequestHandler):
                         msg['Subject'] = subject
                         msg['From'] = SMTP_FROM
                         msg['To'] = to_addr
+                        if cc_list:
+                            msg['Cc'] = ", ".join(cc_list)
                         part = MIMEText(html_body, 'html')
                         msg.attach(part)
+                        recipients = [to_addr] + cc_list
                         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-                            server.starttls()
+                            # Decide TLS behavior: auto enables TLS for non-25; off disables; on forces
+                            use_tls = (SMTP_TLS == 'on') or (SMTP_TLS == 'auto' and SMTP_PORT != 25)
+                            if use_tls:
+                                try:
+                                    server.starttls()
+                                except Exception as e:
+                                    print(f"[MCP Server] /mail/send starttls warning: {e}")
                             if SMTP_USER and SMTP_PASSWORD:
                                 server.login(SMTP_USER, SMTP_PASSWORD)
-                            server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+                            server.sendmail(SMTP_FROM, recipients, msg.as_string())
                         self._json(200, {"ok": True, "sent": True})
                         return
                     except Exception as e:
                         # Fall through to preview
                         print(f"[MCP Server] /mail/send SMTP error: {e}")
-                # Preview fallback: write HTML to workspace and return URL
+                # Preview fallback: write HTML to workspace and return URL to view
                 try:
                     preview_path = os.path.join(WORKSPACE_ROOT, "healthcheck_email_preview.html")
                     with open(preview_path, "w", encoding="utf-8") as f:
                         f.write(html_body)
-                    self._json(200, {"ok": False, "previewPath": preview_path, "previewUrl": "/healthcheck"})
+                    self._json(200, {"ok": False, "previewPath": preview_path, "previewUrl": "/preview/healthcheck-email"})
                 except Exception as e:
                     self._json(500, {"error": str(e)})
             except Exception as e:

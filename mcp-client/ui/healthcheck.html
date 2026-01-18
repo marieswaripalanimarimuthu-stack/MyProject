@@ -5,107 +5,351 @@
   <title>CJCM Order Validation Healthcheck</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; }
-    h1 { margin: 0 0 10px 0; font-size: 20px; }
-    .note { color: #555; margin: 6px 0; }
+    body { font-family: Segoe UI, Arial, sans-serif; margin: 20px; font-size: 13px; color: #222; }
+    .note { color: #555; margin: 6px 0; font-size: 13px; }
     .error { color: #d93025; }
     .success { color: #188038; font-weight: 600; }
-    table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 13px; }
-    th { background: #f4f4f4; text-align: left; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; border: 1px solid #777; background: #fff; }
+    th, td { border: 1px solid #777; padding: 6px 8px; font-size: 13px; background: #fff; }
+    th { background: #f4f4f4; text-align: left; font-weight: 700; }
+    td.num { text-align: center; }
+    /* Limit WORKOBJECTSTATUS column width (first column) */
+    table th:first-child, table td:first-child { max-width: 260px; width: 260px; white-space: normal; word-break: break-word; }
     .actions { margin: 10px 0; display: flex; gap: 12px; align-items: center; }
+    .ranges { margin: 10px 0; display: flex; flex-wrap: wrap; gap: 8px; }
+    .ranges button { padding: 6px 10px; font-size: 13px; }
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #999; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <h1>CJCM Order Validation Healthcheck</h1>
-  <div id="status" class="note">Loading data and sending email... <span class="spinner"></span></div>
-  <div class="actions">
-    <button id="btnRetry" type="button">Retry</button>
-    <a id="previewLink" href="#" target="_blank" style="display:none;">Open email preview</a>
+  <div id="status" class="note">Select a date range to run.</div>
+  <div class="ranges">
+    <button data-range="15m" type="button">Last 15 minutes</button>
+    <button data-range="1h" type="button">Last 1 hour</button>
+    <button data-range="4h" type="button">Last 4 hours</button>
+    <button data-range="8h" type="button">Last 8 hours</button>
+    <button data-range="16h" type="button">Last 16 hours</button>
+    <button data-range="1d" type="button">Last 1 Day</button>
+    <button data-range="2d" type="button">Last 2 Days</button>
+    <button data-range="3d" type="button">Last 3 Days</button>
   </div>
+  <a id="previewLink" href="#" target="_blank" style="display:none;">Open email preview</a>
+  <div id="rangeInfo" class="note"></div>
   <div id="results"></div>
 
   <script>
     const ORACLE_ENDPOINT = 'http://127.0.0.1:8765/oracle/query';
     const MAIL_ENDPOINT = 'http://127.0.0.1:8765/mail/send';
+    // Active window (defaults to last 1 day)
+    let activeWindow = { type: 'relative', value: '1d' };
+    function toDate(s){ const d = new Date(s + 'T00:00:00'); return d; }
+    function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+    function addMinutes(d, n){ const x = new Date(d); x.setMinutes(x.getMinutes() + n); return x; }
+    function fmtLabel(d){
+      const mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const mm = mons[d.getMonth()];
+      const dd = String(d.getDate()).padStart(2,'0');
+      const yy = String(d.getFullYear()).slice(-2);
+      return `${dd}-${mm}-${yy}`;
+    }
+    function computeWindow(){
+      const now = new Date();
+      let start = addMinutes(now, -24*60), end = now; // default last 1 day
+      if (activeWindow.type === 'relative'){
+        const v = activeWindow.value;
+        if (v.endsWith('m')){ const mins = parseInt(v); start = addMinutes(now, -mins); }
+        else if (v.endsWith('h')){ const hrs = parseInt(v); start = addMinutes(now, -hrs*60); }
+        else if (v.endsWith('d')){ const days = parseInt(v); start = addDays(now, -days); }
+      }
+      // Labels: unique set of truncated dates between start and end inclusive
+      const labels = [];
+      let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+      const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+      while (cur <= endDay){ labels.push(new Date(cur)); cur = addDays(cur, 1); }
+      return { start, end, labels };
+    }
 
-    const SQL = `SELECT * FROM (
-    SELECT 
-        SOURCE_TABLE,
-        WORKOBJECTSTATUS,
-        SAMPLE_CARTS,
-        TRUNC(PXCREATEDATETIME) as CREATED_DATE,
-        COUNT(*) OVER (PARTITION BY SOURCE_TABLE, WORKOBJECTSTATUS) as "Total"
-    FROM (
-        SELECT 'LINE' as SOURCE_TABLE, WORKOBJECTSTATUS, PXCREATEDATETIME, CARTID FROM POJO_data.vzcm_data_lineentity
-        UNION ALL
-        SELECT 'SUBMIT' as SOURCE_TABLE, WORKOBJECTSTATUS, PXCREATEDATETIME, CARTID FROM POJO_data.vzcm_data_ordersubmitentity
-        UNION ALL
-        SELECT 'CONFIRM' as SOURCE_TABLE, WORKOBJECTSTATUS, PXCREATEDATETIME, CARTID FROM POJO_data.vzcm_data_orderconfirmationentity
-    ) combined_data
-    LEFT JOIN (
-        SELECT SOURCE_TABLE as ST, WORKOBJECTSTATUS as WS, 
-               LISTAGG(CARTID, ', ') WITHIN GROUP (ORDER BY CARTID) as SAMPLE_CARTS
-        FROM (
-            SELECT DISTINCT SOURCE_TABLE, WORKOBJECTSTATUS, CARTID
-            FROM (
-                SELECT 'LINE' as SOURCE_TABLE, WORKOBJECTSTATUS, CARTID,
-                       ROW_NUMBER() OVER (PARTITION BY WORKOBJECTSTATUS ORDER BY CARTID) as rn 
-                FROM POJO_data.vzcm_data_lineentity
-                UNION ALL
-                SELECT 'SUBMIT' as SOURCE_TABLE, WORKOBJECTSTATUS, CARTID,
-                       ROW_NUMBER() OVER (PARTITION BY WORKOBJECTSTATUS ORDER BY CARTID) as rn 
-                FROM POJO_data.vzcm_data_ordersubmitentity
-                UNION ALL
-                SELECT 'CONFIRM' as SOURCE_TABLE, WORKOBJECTSTATUS, CARTID,
-                       ROW_NUMBER() OVER (PARTITION BY WORKOBJECTSTATUS ORDER BY CARTID) as rn 
-                FROM POJO_data.vzcm_data_orderconfirmationentity
-            ) WHERE rn <= 3
-        )
-        GROUP BY SOURCE_TABLE, WORKOBJECTSTATUS
-    ) samples ON combined_data.SOURCE_TABLE = samples.ST AND combined_data.WORKOBJECTSTATUS = samples.WS
-    WHERE PXCREATEDATETIME BETWEEN TO_TIMESTAMP('2026-01-10T00:00', 'YYYY-MM-DD"T"HH24:MI') 
-                                 AND TO_TIMESTAMP('2026-01-12T23:59', 'YYYY-MM-DD"T"HH24:MI')
-)
-PIVOT (
-    COUNT(CREATED_DATE) 
-    FOR CREATED_DATE IN (
-        TO_DATE('2026-01-10', 'YYYY-MM-DD') AS "10-Jan-26",
-        TO_DATE('2026-01-11', 'YYYY-MM-DD') AS "11-Jan-26",
-        TO_DATE('2026-01-12', 'YYYY-MM-DD') AS "12-Jan-26"
-    )
-)
-ORDER BY SOURCE_TABLE, "Total" DESC`;
+    // HTML escape utility used in table rendering
+    function escapeHtml(s){
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[c] || c);
+    }
 
-    function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
-    function buildTable(columns, rows){
+    // Build pivot SQL for a given base table over the selected window
+    function makeSql(table){
+      const { start, end, labels } = computeWindow();
+      const s_ts = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}T${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
+      const e_ts = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}T${String(end.getHours()).padStart(2,'0')}:${String(end.getMinutes()).padStart(2,'0')}`;
+      const pivots = labels.map(d => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth()+1).padStart(2,'0');
+        const day = String(d.getDate()).padStart(2,'0');
+        const lbl = fmtLabel(d);
+        return `TO_DATE('${y}-${m}-${day}', 'YYYY-MM-DD') AS "${lbl}"`;
+      }).join(',\n        ');
+      return `SELECT * FROM (\n    SELECT \n        WORKOBJECTSTATUS,\n        TRUNC(PXCREATEDATETIME) as CREATED_DATE,\n        COUNT(*) OVER (PARTITION BY WORKOBJECTSTATUS) as "Total"\n    FROM ${table}\n    WHERE PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') \n                                 AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')\n)\nPIVOT (\n    COUNT(CREATED_DATE) \n    FOR CREATED_DATE IN (\n        ${pivots}\n    )\n)\nORDER BY "Total" DESC`;
+    }
+
+    // Subject line range text (e.g., Jan 10 2026 to Jan 12 2026)
+    function fmtSubjectRange(){
+      const { start, end } = computeWindow();
+      const mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const sTxt = `${mons[start.getMonth()]} ${start.getDate()} ${start.getFullYear()}`;
+      const eTxt = `${mons[end.getMonth()]} ${end.getDate()} ${end.getFullYear()}`;
+      return `CJCM Order Validation Healthcheck Report - ${sTxt} to ${eTxt}`;
+    }
+
+    // Browser/email display range text including time
+    function fmtRangeText(){
+      const { start, end } = computeWindow();
+      const mons = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const two = n => String(n).padStart(2,'0');
+      const sTxt = `${mons[start.getMonth()]} ${start.getDate()} ${start.getFullYear()} ${two(start.getHours())}:${two(start.getMinutes())}`;
+      const eTxt = `${mons[end.getMonth()]} ${end.getDate()} ${end.getFullYear()} ${two(end.getHours())}:${two(end.getMinutes())}`;
+      return `Date Range: ${sTxt} to ${eTxt}`;
+    }
+
+    // Email-friendly table (with borders, center numeric, fill zeros for pivot/Total)
+    function buildEmailTable(columns, rows, opts){
+      const pivotCols = (columns||[]).filter(c => /\d{2}-[A-Za-z]{3}-\d{2}|^Total$/i.test(String(c||'')));
+      const thead = '<thead><tr>' + (columns||[]).map(c => 
+        `<th style="font-weight:700;text-align:left;padding:6px 8px;border:1px solid #ddd;background-color:#f8f9fa;">${escapeHtml(c)}</th>`
+      ).join('') + '</tr></thead>';
+      const tbody = '<tbody>' + (rows||[]).map((r, idx) => {
+        const style = (opts && opts.highlightFirst && idx < opts.highlightFirst) ? ' style="color:#d93025;font-weight:700;"' : '';
+        const tds = r.map((v, i) => {
+          const col = columns[i];
+          let val = v;
+          const isPivot = pivotCols.includes(col);
+          // zero-fill for pivot/Total blanks
+          if ((val === null || val === undefined || String(val).trim() === '') && isPivot){ val = '0'; }
+          const cellStyle = isPivot ? 'text-align:center;padding:6px 8px;border:1px solid #ddd;' : 'padding:6px 8px;border:1px solid #ddd;';
+          return `<td style="${cellStyle}">${escapeHtml(val===null||val===undefined?'':val)}</td>`;
+        }).join('');
+        return `<tr${style}>` + tds + '</tr>';
+      }).join('') + '</tbody>';
+      return `<table style="border-collapse:collapse;width:100%;background:#fff;border:1px solid #ddd;margin-bottom:20px;">` + thead + tbody + '</table>';
+    }
+
+    // Email-friendly table (no borders, center numeric, fill zeros for pivot/Total)
+    function buildTable(columns, rows, opts){
+      const pivotCols = (columns||[]).filter(c => /\d{2}-[A-Za-z]{3}-\d{2}|^Total$/i.test(String(c||'')));
       const thead = '<thead><tr>' + (columns||[]).map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
-      const tbody = '<tbody>' + (rows||[]).map(r => '<tr>' + r.map(v => `<td>${escapeHtml(v===null||v===undefined?'':v)}</td>`).join('') + '</tr>').join('') + '</tbody>';
+      const tbody = '<tbody>' + (rows||[]).map((r, idx) => {
+        const style = (opts && opts.highlightFirst && idx < opts.highlightFirst) ? ' style="color:#d93025;font-weight:700;"' : '';
+        const tds = r.map((v, i) => {
+          const col = columns[i];
+          let val = v;
+          const isPivot = pivotCols.includes(col);
+          if ((val === null || val === undefined || String(val).trim() === '') && isPivot){ val = '0'; }
+          const cls = isPivot ? ' class="num"' : '';
+          return `<td${cls}>${escapeHtml(val===null||val===undefined?'':val)}</td>`;
+        }).join('');
+        return `<tr${style}>` + tds + '</tr>';
+      }).join('') + '</tbody>';
       return '<table>' + thead + tbody + '</table>';
+    }
+    
+
+    // Helper: case-insensitive column index
+    function colIdx(cols, name){
+      if (!cols) return -1;
+      const target = String(name).toLowerCase();
+      for (let i = 0; i < cols.length; i++){
+        if (String(cols[i]||'').toLowerCase() === target) return i;
+      }
+      return -1;
+    }
+
+    // Build detail SQL per hierarchy for a specific WorkObjectStatus within selected window
+    function makeDetailSql(hierarchy, status){
+      const { start, end } = computeWindow();
+      const s_ts = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}T${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
+      const e_ts = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}T${String(end.getHours()).padStart(2,'0')}:${String(end.getMinutes()).padStart(2,'0')}`;
+      if (hierarchy === 'line'){
+        return `SELECT 
+    line.PYSTATUSWORK, 
+    line.WORKOBJECTSTATUS,
+    line.CARTID, line.ORDERNUMBER, line.LOCATIONCODE,
+    ful.FULFILLMENTTYPE, 
+    ful.TRANSACTIONTYPE,
+    line.INVENTORYAVAILABLE_OR, line.CHARGESTATUS_OR, line.CLOSELOAN_OR, 
+    line.CREATELOAN_OR, line.CANCELLOAN_OR, line.RDB_OR, line.GOAI_OR, 
+    line.VOT_OR, line.PERSPAIR_OR, line.EXTENDRESERVATION_OR, 
+    line.APPLEPARKORDER_OR, line.APPLECARE_OR, line.EQUIPMENTWARRANTYENTRY_OR, 
+    line.SHIPPINGRECEIPT_OR, line.SHIPMENTCONFIRMATIONEMAIL_OR, 
+    line.ACTIVATIONSTATUS_OR, line.CANCELORDER_OR, line.VOIDSAPITEMS_OR, 
+    line.CANCELEMAIL_OR, line.VOIDPAYMENT_OR, line.SIMOTAPROGRAMMING 
+FROM POJO_data.vzcm_data_lineentity line
+INNER JOIN POJO_data.vzcm_data_fulfillmententity ful 
+    ON line.CARTID = ful.CARTID
+WHERE line.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
+  AND line.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
+  AND line.LINEACTIVITYTYPE = 'AAL' 
+  AND line.CLIENTTYPE = 'Digital'
+  AND ful.FULFILLMENTTYPE = 'FFL'
+ORDER BY line.PXCREATEDATETIME DESC
+FETCH FIRST 3 ROWS ONLY`;
+      } else if (hierarchy === 'order'){
+        return `SELECT 
+    conf.PYSTATUSWORK, 
+    conf.WORKOBJECTSTATUS,
+    conf.CARTID, conf.ORDERNUMBER, conf.LOCATIONCODE,
+    ful.FULFILLMENTTYPE, 
+    ful.TRANSACTIONTYPE,
+    conf.FRAUDVERIFICATIONSTATUS,
+    conf.MODIFYCREDIT_OR, conf.SAVEOFFER_OR, conf.COMMITOFFER_OR, 
+    conf.SECUREPAY_OR, conf.FRAUDSUBMISSIONTIMESTAMP_OR, conf.CHARGESTATUS_OR, 
+    conf.TRADEACCOUNTCHARGE_OR, conf.TRADEGIFTCARD_OR, conf.TRADECREDITSTATUS_OR, 
+    conf.CANCELORDER_OR, conf.VOIDSAPITEMS_OR, conf.VOIDPAYMENT_OR, conf.CANCELEMAIL_OR, 
+    conf.SUBMITPAYMENT_OR, conf.SUBMITBAPAYMENT_OR, conf.MDMANAGERAPPROVAL_OR, conf.CTOC_OR,
+    conf.FRAUDRELEASETIMESTAMP, conf.CREATEINVENTORYBLOCK, conf.SKIPSUBMITPAYMENT, conf.SAVELOAN, conf.GENERATERECEIPT
+FROM POJO_data.vzcm_data_orderconfirmationentity conf
+LEFT JOIN POJO_data.vzcm_data_fulfillmententity ful 
+    ON conf.CARTID = ful.CARTID
+WHERE conf.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
+  AND conf.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
+  AND conf.ORDERACTIVITYTYPE = 'AAL' 
+  AND conf.CLIENTTYPE = 'Digital'
+  AND (ful.FULFILLMENTTYPE = 'FFL' OR ful.FULFILLMENTTYPE IS NULL)
+ORDER BY conf.PXCREATEDATETIME DESC
+FETCH FIRST 3 ROWS ONLY`;
+      } else { // cart
+        return `SELECT 
+    sub.PYSTATUSWORK, 
+    sub.WORKOBJECTSTATUS,
+    sub.CARTID,
+    ful.FULFILLMENTTYPE, 
+    ful.TRANSACTIONTYPE,
+    sub.BIOCATCH_OR, sub.ASSIGNMTN_OR, sub.GENERATEINSTALLMENTSCONTRACTS_OR, 
+    sub.PROMOJOURNEYINITATION_OR, sub.REVERSEJOURNEYINITATION_OR, sub.CARTSTATUS_OR, 
+    sub.ISSEDOFFER, sub.PREORDERWRITE_OR, sub.FULLAUTHREQUIRED, sub.ASSIGNMTNREQUIRED
+FROM POJO_data.vzcm_data_ordersubmitentity sub
+INNER JOIN POJO_data.vzcm_data_fulfillmententity ful 
+    ON sub.CARTID = ful.CARTID
+WHERE sub.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
+  AND sub.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
+  AND sub.CLIENTTYPE = 'Digital'
+  AND ful.FULFILLMENTTYPE = 'FFL'
+ORDER BY sub.PXCREATEDATETIME DESC
+FETCH FIRST 3 ROWS ONLY`;
+      }
+    }
+
+    // Format recent carts list from detail dataset
+    function formatRecent(detail){
+      if (!detail || !detail.columns || !detail.rows) return '';
+      const cols = detail.columns; const rows = detail.rows;
+      const iCart = colIdx(cols, 'CARTID');
+      const iOrder = colIdx(cols, 'ORDERNUMBER');
+      const iLoc = colIdx(cols, 'LOCATIONCODE');
+      const items = rows.map(r => {
+        let s = '';
+        if (iCart >= 0) s = String(r[iCart]||'');
+        if (iOrder >= 0) s += s ? `/${String(r[iOrder]||'')}` : String(r[iOrder]||'');
+        if (iLoc >= 0) s += s ? `/${String(r[iLoc]||'')}` : String(r[iLoc]||'');
+        return s;
+      });
+      return items.slice(0,3).map(escapeHtml).join(', ');
+    }
+
+    // Append a "Recent Carts (Top 3)" column to an existing dataset using a details map keyed by status
+    function appendRecentColumn(dataset, detailsMap){
+      const columns = dataset.columns || [];
+      const rows = dataset.rows || [];
+      const idxStatus = colIdx(columns, 'WORKOBJECTSTATUS');
+      const newCols = columns.concat(['Recent Carts (Top 3)']);
+      const newRows = rows.map((r, i) => {
+        let extra = '';
+        if (i < 5 && idxStatus >= 0){
+          const status = String(r[idxStatus]||'');
+          const det = detailsMap && detailsMap[status];
+          extra = formatRecent(det);
+        }
+        return r.concat([extra]);
+      });
+      return { columns: newCols, rows: newRows };
     }
 
     async function runHealthcheck(){
       const statusEl = document.getElementById('status');
       const resultsEl = document.getElementById('results');
       const previewLink = document.getElementById('previewLink');
-      statusEl.innerHTML = 'Loading data and sending email... <span class="spinner"></span>';
+      statusEl.innerHTML = 'Loading pivot data... <span class="spinner"></span>';
       previewLink.style.display = 'none';
       try {
-        const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL, params: {}, maxRows: 5000 }) });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.error || 'Query failed');
-        const tableHtml = buildTable(data.columns || [], data.rows || []);
-        resultsEl.innerHTML = tableHtml;
-        // Compose email HTML
-        const subject = 'CJCM Order Validation Healthcheck (10-12 Jan 2026)';
-        const bodyHtml = `
-          <div style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;">
-            <h2 style="font-size:16px;margin:0 0 8px 0;">CJCM Order Validation Healthcheck</h2>
-            <div style="margin:4px 0;">Date window: 2026-01-10 to 2026-01-12</div>
-            ${tableHtml}
-          </div>`;
+        // Build SQLs for each hierarchy (Cart -> Order -> Line)
+        const SQL_SUBMIT = makeSql('POJO_data.vzcm_data_ordersubmitentity');
+        const SQL_CONFIRM = makeSql('POJO_data.vzcm_data_orderconfirmationentity');
+        const SQL_LINE = makeSql('POJO_data.vzcm_data_lineentity');
+        const pCart = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_SUBMIT, params: {}, maxRows: 5000 }) });
+        const pOrder = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_CONFIRM, params: {}, maxRows: 5000 }) });
+        const pLine = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_LINE, params: {}, maxRows: 5000 }) });
+        const [rCart, rOrder, rLine] = await Promise.all([pCart, pOrder, pLine]);
+        const [dCart, dOrder, dLine] = await Promise.all([rCart.json(), rOrder.json(), rLine.json()]);
+        if (!rCart.ok) throw new Error(dCart.error || 'Cart query failed');
+        if (!rOrder.ok) throw new Error(dOrder.error || 'Order query failed');
+        if (!rLine.ok) throw new Error(dLine.error || 'Line query failed');
+        // Render pivot results first
+        const hCart0 = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Cart</h3>` + buildTable(dCart.columns || [], dCart.rows || [], { highlightFirst: 5 });
+        const hOrder0 = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Order</h3>` + buildTable(dOrder.columns || [], dOrder.rows || [], { highlightFirst: 5 });
+        const hLine0 = `<h3 style=\"margin:12px 0 6px 0;\">Hierarchy: Line</h3>` + buildTable(dLine.columns || [], dLine.rows || [], { highlightFirst: 5 });
+        const pageHtml0 = hCart0 + hOrder0 + hLine0;
+        const rangeInfoEl = document.getElementById('rangeInfo');
+        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText(); }
+        resultsEl.innerHTML = pageHtml0;
+        // Now trigger details
+        statusEl.innerHTML = 'Loading recent carts and sending email... <span class="spinner"></span>';
+        // Determine top-5 WorkObjectStatus per hierarchy
+        const iCartStatus = colIdx(dCart.columns || [], 'WORKOBJECTSTATUS');
+        const iOrderStatus = colIdx(dOrder.columns || [], 'WORKOBJECTSTATUS');
+        const iLineStatus = colIdx(dLine.columns || [], 'WORKOBJECTSTATUS');
+        const topCartStatuses = (dCart.rows || []).slice(0,5).map(r => iCartStatus>=0 ? String(r[iCartStatus]||'') : '').filter(s => s);
+        const topOrderStatuses = (dOrder.rows || []).slice(0,5).map(r => iOrderStatus>=0 ? String(r[iOrderStatus]||'') : '').filter(s => s);
+        const topLineStatuses = (dLine.rows || []).slice(0,5).map(r => iLineStatus>=0 ? String(r[iLineStatus]||'') : '').filter(s => s);
+
+        // Fetch recent carts per status (3 rows)
+        const fetchDetail = async (hier, statuses) => {
+          const m = {};
+          const reqs = statuses.map(st => fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: makeDetailSql(hier, st), params: {}, maxRows: 25 }) })
+            .then(resp => resp.json().then(d => ({ status: st, data: d, ok: resp.ok })).catch(() => ({ status: st, data: {}, ok: false })))
+            .catch(() => ({ status: st, data: {}, ok: false }))
+          );
+          const all = await Promise.all(reqs);
+          all.forEach(x => { if (x.ok) m[x.status] = x.data; });
+          return m;
+        };
+        const [cartDet, orderDet, lineDet] = await Promise.all([
+          fetchDetail('cart', topCartStatuses),
+          fetchDetail('order', topOrderStatuses),
+          fetchDetail('line', topLineStatuses)
+        ]);
+
+        // Append recent carts column
+        const cartAug = appendRecentColumn(dCart, cartDet);
+        const orderAug = appendRecentColumn(dOrder, orderDet);
+        const lineAug = appendRecentColumn(dLine, lineDet);
+
+        const hCart = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Cart</h3>` + buildTable(cartAug.columns, cartAug.rows, { highlightFirst: 5 });
+        const hOrder = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Order</h3>` + buildTable(orderAug.columns, orderAug.rows, { highlightFirst: 5 });
+        const hLine = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Line</h3>` + buildTable(lineAug.columns, lineAug.rows, { highlightFirst: 5 });
+        const pageHtml = hCart + hOrder + hLine;
+        // Show browser date-time range below controls
+        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText(); }
+        resultsEl.innerHTML = pageHtml;
+        // Compose email HTML (no global header; only hierarchy headers)
+        const subject = fmtSubjectRange();
+        const emailRange = `<div style="color:#1a73e8;font-weight:700;font-size:14px;margin:4px 0;">${fmtRangeText()}</div>`;
+        const eCart = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Cart</h3>` + buildEmailTable(cartAug.columns, cartAug.rows, { highlightFirst: 5 });
+        const eOrder = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Order</h3>` + buildEmailTable(orderAug.columns, orderAug.rows, { highlightFirst: 5 });
+        const eLine = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Line</h3>` + buildEmailTable(lineAug.columns, lineAug.rows, { highlightFirst: 5 });
+        const bodyHtml = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;">${emailRange}${eCart}${eOrder}${eLine}</div>`;
         const mailResp = await fetch(MAIL_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'marieswari.palanimarimuthu@verizon.com', subject, html: bodyHtml }) });
         let mailData = {};
         try { mailData = await mailResp.json(); } catch {}
@@ -114,15 +358,21 @@ ORDER BY SOURCE_TABLE, "Total" DESC`;
         } else {
           const msg = mailData.error ? String(mailData.error) : `HTTP ${mailResp.status}`;
           statusEl.innerHTML = `<span class="error">Email send failed: ${escapeHtml(msg)}</span>`;
-          if (mailData.previewPath){ previewLink.href = `http://127.0.0.1:8765${mailData.previewUrl || '/reporting.csv'}`; previewLink.textContent = 'Open email preview'; previewLink.style.display = 'inline-block'; }
+          if (mailData.previewPath){ previewLink.href = `http://127.0.0.1:8765${mailData.previewUrl || '/preview/healthcheck-email'}`; previewLink.textContent = 'Open email preview'; previewLink.style.display = 'inline-block'; }
         }
       } catch (e){
         statusEl.innerHTML = `<span class="error">${escapeHtml(e.message)}</span>`;
       }
     }
 
-    document.getElementById('btnRetry').addEventListener('click', runHealthcheck);
-    window.addEventListener('DOMContentLoaded', runHealthcheck);
+    // Range buttons
+    document.querySelectorAll('.ranges button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        activeWindow = { type: 'relative', value: btn.getAttribute('data-range') };
+        runHealthcheck();
+      });
+    });
+    // Do not auto-run on initial load; user must click a range
   </script>
 </body>
 </html>
