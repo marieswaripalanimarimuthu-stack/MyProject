@@ -862,12 +862,20 @@ FETCH FIRST 1 ROWS ONLY`;
             <div class="field">
               <label for="cartIdInput">CARTID</label>
               <input id="cartIdInput" type="text" placeholder="Enter CARTID" />
+              <div class="note" style="margin-top:6px;">Enter CARTID and click Run to view hierarchy.</div>
             </div>
+          </div>
+          <div class="field">
+            <label for="csvUploadOv">Upload Validation CSV</label>
+            <input id="csvUploadOv" type="file" accept=".csv" />
+            <div id="csvUploadOvStatus" class="note">No sheet loaded.</div>
           </div>
           <div class="actions">
             <button id="btnRunHierarchy" type="button">Run</button>
             <span id="hierSpinner" class="spinner hidden" aria-hidden="true"></span>
             <button id="btnToggleSql" class="ghost" type="button">Show SQL</button>
+            <button id="btnShowHistory" type="button" title="Show order history">Show History</button>
+            <button id="btnValidateHierarchy" type="button" title="Validate against sheet">Validate</button>
           </div>
           <div id="sqlPanel" class="hidden">
             <div class="actions" style="margin-top:8px;">
@@ -890,6 +898,151 @@ FETCH FIRST 1 ROWS ONLY`;
       const btnToggleSql = document.getElementById('btnToggleSql');
       const sqlPanel = document.getElementById('sqlPanel');
       const btnCopySql = document.getElementById('btnCopySql');
+      const btnShowHistory = document.getElementById('btnShowHistory');
+      const btnValidateHierarchy = document.getElementById('btnValidateHierarchy');
+      const csvUploadOv = document.getElementById('csvUploadOv');
+      const csvUploadOvStatus = document.getElementById('csvUploadOvStatus');
+      // CSV upload handling for self-contained validation; gate Validate until loaded
+      function splitCsvLine(line){
+        const out = [];
+        let cur = '';
+        let inQ = false;
+        for (let i = 0; i < line.length; i++){
+          const ch = line[i];
+          if (ch === '"'){
+            if (inQ && line[i+1] === '"'){ cur += '"'; i++; }
+            else { inQ = !inQ; }
+          } else if (ch === ',' && !inQ){ out.push(cur); cur = ''; }
+          else { cur += ch; }
+        }
+        out.push(cur);
+        return out;
+      }
+      function parseCsv(text){
+        const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim().length);
+        if (!lines.length) return { columns: [], rows: [] };
+        const headers = splitCsvLine(lines[0]).map(h => h.trim());
+        const rows = [];
+        for (let i = 1; i < lines.length; i++){
+          const toks = splitCsvLine(lines[i]);
+          const o = {};
+          headers.forEach((h, idx) => { o[h] = toks[idx] || ''; });
+          rows.push(o);
+        }
+        return { columns: headers, rows };
+      }
+      // Disable Validate until a sheet is loaded
+      btnValidateHierarchy.disabled = true;
+      csvUploadOv.addEventListener('change', async (e) => {
+        const f = e.target.files && e.target.files[0];
+        if (!f){ csvUploadOvStatus.textContent = 'No sheet loaded.'; btnValidateHierarchy.disabled = true; return; }
+        try {
+          const text = await f.text();
+          const parsed = parseCsv(text);
+          if (!parsed.rows || parsed.rows.length === 0){
+            csvUploadOvStatus.textContent = 'Failed to parse CSV.';
+            btnValidateHierarchy.disabled = true;
+            return;
+          }
+          window.__validationSpecCache = parsed;
+          csvUploadOvStatus.textContent = `Loaded ${parsed.rows.length} rows.`;
+          btnValidateHierarchy.disabled = false;
+        } catch(err){
+          console.error('CSV parse error', err);
+          csvUploadOvStatus.textContent = 'Failed to parse CSV.';
+          btnValidateHierarchy.disabled = true;
+        }
+      });
+
+      // Show order history for given CARTID
+      btnShowHistory.addEventListener('click', async () => {
+        const cartId = (cartIdInput.value || '').trim();
+        if (!cartId) { alert('Please enter CARTID.'); return; }
+        btnShowHistory.disabled = true;
+        openModal('Order History', '<div class="note">Loading history... <span class="spinner"></span></div>');
+        try {
+          const hist = await fetchOrderHistory(cartId, '', '', '');
+          window.__lastHistCount = (hist.rows || []).length;
+          const countHtml = `<div class=\"metric\">No of records: ${window.__lastHistCount}</div>`;
+          const html = countHtml + buildTableHtml(hist.columns || [], hist.rows || []);
+          document.getElementById('detailModalContent').innerHTML = html;
+        } catch(err){
+          console.error('History error', err);
+          document.getElementById('detailModalContent').innerHTML = `<div class="error">${escapeHtml(err.message)}</div>`;
+        } finally {
+          btnShowHistory.disabled = false;
+        }
+      });
+
+      // Validate against uploaded sheet for given CARTID
+      btnValidateHierarchy.addEventListener('click', async () => {
+        const cartId = (cartIdInput.value || '').trim();
+        if (!cartId) { alert('Please enter CARTID.'); return; }
+        const specRows = (window.__validationSpecCache && window.__validationSpecCache.rows) ? window.__validationSpecCache.rows : null;
+        if (!specRows || !Array.isArray(specRows) || specRows.length === 0) {
+          alert('Validation sheet not loaded. Please upload the CSV.');
+          return;
+        }
+        btnValidateHierarchy.disabled = true;
+        openModal('Validate Against Spreadsheet', '<div class="note">Running validation... <span class="spinner"></span></div>');
+        try {
+          // Collect all keys from the rendered hierarchy and query orderhistory across all 3 hierarchies
+          const { cartid, orderPairs, mtns } = collectHierarchyKeys(document);
+          const hist = await fetchOrderHistoryAllKeys(cartid || cartId, orderPairs, mtns);
+          // Populate ids for header and reporting: use first order pair and first MTN if present
+          const primaryOrder = (orderPairs && orderPairs.length > 0) ? orderPairs[0] : { ordernumber: '', locationcode: '' };
+          const primaryMtn = (mtns && mtns.length > 0) ? mtns[0] : '';
+          const ids = {
+            cartid: cartId || cartid || '',
+            ordernumber: primaryOrder.ordernumber || '',
+            locationcode: primaryOrder.locationcode || '',
+            mtn: primaryMtn
+          };
+          const outcome = validateHistoryAgainstSpec(hist, specRows, ids);
+          const html = renderValidationOutcome(outcome);
+          const contentEl = document.getElementById('detailModalContent');
+          contentEl.innerHTML = html;
+          const dl = document.getElementById('downloadValidationCsv');
+          if (dl) {
+            dl.addEventListener('click', async () => {
+              const csv = buildCsv(outcome.columns, outcome.rows);
+              const fname = `${String((outcome.ids && outcome.ids.cartid) || 'cart').trim() || 'cart'}.csv`;
+              downloadCsv(fname, csv);
+              // Append to Reporting.csv on server and show acknowledgment
+              try {
+                const resp = await fetch('http://127.0.0.1:8765/reporting/append', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ids: outcome.ids || {}, columns: outcome.columns || [], rows: outcome.rows || [], downloadedFile: fname })
+                });
+                let data = {};
+                try { data = await resp.json(); } catch {}
+                if (resp.ok) {
+                  const appended = (data && typeof data.appended === 'number') ? data.appended : (outcome.rows || []).length;
+                  const path = (data && data.path) ? data.path : '';
+                  showToast(`Reporting.csv updated: appended ${appended} rows${path ? ' to ' + path : ''}`);
+                  try { openModal('Success', '<div class="note">Written successfully</div>'); } catch {}
+                  // Optional: quick reachability check
+                  try {
+                    const chk = await fetch('http://127.0.0.1:8765/reporting.csv');
+                    if (chk.ok) { showToast('Reporting.csv is accessible'); }
+                  } catch {}
+                } else {
+                  const errMsg = (data && data.error) ? String(data.error) : `HTTP ${resp.status}`;
+                  showToast(`Reporting append failed: ${errMsg}`);
+                }
+              } catch (e) {
+                console.warn('Reporting append failed', e);
+                showToast('Reporting append failed (network error)');
+              }
+            }, { once: true });
+          }
+        } catch (err) {
+          console.error('Validation error', err);
+          openModal('Error', `<div class="error">${escapeHtml(err.message)}</div>`);
+        } finally {
+          btnValidateHierarchy.disabled = false;
+        }
+      });
 
       // Show a helpful placeholder so the div isn't empty
       hierResults.innerHTML = '<div class="note">Enter CARTID and click Run to view hierarchy.</div>';
@@ -910,10 +1063,6 @@ FETCH FIRST 1 ROWS ONLY`;
           const sqlOrders = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid`;
           const sqlLines = `SELECT CASEID, ORDERNUMBER, LOCATIONCODE, MTN, PYSTATUSWORK, WORKOBJECTSTATUS FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid`;
           const combinedSql = `-- CART\n${sqlCart}\n\n-- ORDER\n${sqlOrders}\n\n-- LINE\n${sqlLines}`;
-          if (sqlPanel.classList.contains('hidden')) {
-            sqlPanel.classList.remove('hidden');
-            btnToggleSql.textContent = 'Hide SQL';
-          }
           updateSqlPanel(combinedSql, { cartid: cartId }, {});
           // Execute queries individually to capture per-query durations
           const params = { cartid: cartId };
@@ -971,21 +1120,46 @@ FETCH FIRST 1 ROWS ONLY`;
           showToast('SQL preview copied');
         } catch(e) { console.error('Copy failed', e); }
       });
+
+
     }
 
-    function buildTableHtml(columns, rows) {
+    function buildTableHtml(columns, rows, opts) {
       if (!columns.length) { return '<div class="note">No columns returned.</div>'; }
+      const withValidate = !!(opts && opts.withValidate);
       const upCols = columns.map(c => String(c || '').toUpperCase());
       const idxCase = upCols.indexOf('CASEID');
       const idxCart = upCols.indexOf('CARTID');
-      const thead = '<thead><tr>' + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
+      const idxOrd = upCols.indexOf('ORDERNUMBER');
+      const idxLoc = upCols.indexOf('LOCATIONCODE');
+      const idxMtn = upCols.indexOf('MTN') >= 0 ? upCols.indexOf('MTN') : (upCols.indexOf('ORDER_MTN') >= 0 ? upCols.indexOf('ORDER_MTN') : upCols.indexOf('LINE_MTN'));
+      const idxResult = upCols.indexOf('RESULT');
+      const idxReason = upCols.indexOf('REASON');
+      const thead = '<thead><tr>' + (withValidate ? '<th>Validate</th>' : '') + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
       const tbody = '<tbody>' + rows.map(r => {
-        return '<tr>' + r.map((v, i) => {
+        const validateCell = (() => {
+          if (!withValidate) return '';
+          try {
+            const cart = idxCart >= 0 ? r[idxCart] : '';
+            const ord = idxOrd >= 0 ? r[idxOrd] : '';
+            const loc = idxLoc >= 0 ? r[idxLoc] : '';
+            const mtn = idxMtn >= 0 ? r[idxMtn] : '';
+            return `<td><button class="ov-validate-btn" data-cartid="${escapeHtml(String(cart||''))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">Validate</button></td>`;
+          } catch { return '<td></td>'; }
+        })();
+        return '<tr>' + validateCell + r.map((v, i) => {
           const raw = (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) ? 'N/A' : v;
           if (i === idxCase && raw !== 'N/A') {
             const cartVal = idxCart >= 0 ? r[idxCart] : '';
             const cv = (cartVal === null || cartVal === undefined) ? '' : String(cartVal);
             return `<td><button class="case-btn" data-cartid="${escapeHtml(cv)}" data-caseid="${escapeHtml(String(raw))}">${escapeHtml(String(raw))}</button></td>`;
+          }
+          if (i === idxReason) {
+            const res = idxResult >= 0 ? String(r[idxResult] || '').trim().toUpperCase() : '';
+            const reasonText = String(raw || '').trim();
+            const isSuccess = res === 'PASS' && reasonText.toLowerCase() === 'success';
+            const style = isSuccess ? 'color:#188038;font-weight:600;' : 'color:#d93025;';
+            return `<td><span style="${style}">${escapeHtml(reasonText || 'N/A')}</span></td>`;
           }
           return `<td>${escapeHtml(raw)}</td>`;
         }).join('') + '</tr>';
@@ -1033,6 +1207,24 @@ FETCH FIRST 1 ROWS ONLY`;
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    }
+
+    function renderValidationOutcome(outcome){
+      const ids = outcome.ids || {};
+      const safe = (v) => { const s = String(v || '').trim(); return s ? escapeHtml(s) : 'N/A'; };
+      const headerHtml = `
+        <div class="kv" style="margin-bottom:8px;">
+          <div class="k">No of records</div><div>${(outcome.rows || []).length}</div>
+          <div class="k">CARTID</div><div>${safe(ids.cartid)}</div>
+          <div class="k">ORDERNUMBER</div><div>${safe(ids.ordernumber)}</div>
+          <div class="k">LOCATIONCODE</div><div>${safe(ids.locationcode)}</div>
+          <div class="k">MTN</div><div>${safe(ids.mtn)}</div>
+        </div>
+        <div class="actions" style="margin:8px 0; display:flex; align-items:center; gap:12px;">
+          <span class="note">No of records: ${(outcome.rows || []).length}</span>
+          <button id="downloadValidationCsv" class="secondary">Download Validation CSV</button>
+        </div>`;
+      return headerHtml + buildTableHtml(outcome.columns, outcome.rows, { clickableCart: false });
     }
 
     async function runHierarchy(cartId, container) {
@@ -1142,7 +1334,7 @@ FETCH FIRST 1 ROWS ONLY`;
               parts.push('<li>');
               const lOrd = ln.ORDERNUMBER || ordNum || '';
               const lLoc = ln.LOCATIONCODE || loc || '';
-              parts.push(`<div class="node line collapsed" data-hier="LINE" data-cartid="${escapeHtml(cartVal)}" data-ordernumber="${escapeHtml(lOrd)}" data-locationcode="${escapeHtml(lLoc)}">`);
+              parts.push(`<div class="node line collapsed" data-hier="LINE" data-cartid="${escapeHtml(cartVal)}" data-ordernumber="${escapeHtml(lOrd)}" data-locationcode="${escapeHtml(lLoc)}" data-mtn="${escapeHtml(ln.MTN||'')}">`);
               parts.push('<div class="hier-label"><span class="toggle" data-node="line">+</span> <span>Hierarchy: LINE</span></div>');
               parts.push('<div class="kv children">');
               parts.push(`<div class="k">CASEID</div><div class="v"><a class="case-link" data-case="${escapeHtml(ln.CASEID||'')}">${escapeHtml(ln.CASEID||'')}</a></div>`);
@@ -1299,6 +1491,201 @@ FETCH FIRST 1 ROWS ONLY`;
       });
     }
 
+    // Validation helpers (reused from WOS)
+    const VALIDATION_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQDmu-SAkrPf0PRSEd8KcVF2niQ0WH2V7QBsikf-OuPatJX_3IdeYWbfngbakNiJx_PW3n81QPVx9UQ/pub?gid=1368082964&single=true&output=csv';
+    async function fetchValidationSpec() {
+      // If user uploaded locally, use that first
+      if (Array.isArray(window.__validationSpecCache) && window.__validationSpecCache.length) {
+        return window.__validationSpecCache;
+      }
+      // Prefer server proxy to avoid CORS
+      try {
+        const prox = await fetch(`http://127.0.0.1:8765/proxy?url=${encodeURIComponent(VALIDATION_CSV_URL)}`);
+        if (prox.ok) return parseCsv(await prox.text());
+      } catch {}
+      try {
+        const res = await fetch(VALIDATION_CSV_URL);
+        if (res.ok) return parseCsv(await res.text());
+        throw new Error(await res.text());
+      } catch (e) {
+        throw new Error('Failed to load validation spreadsheet CSV');
+      }
+    }
+
+    function parseCsv(text) {
+      const rows = [];
+      let i = 0, field = '', row = [], inQuotes = false;
+      function pushField(){ row.push(field); field = ''; }
+      function pushRow(){ rows.push(row); row = []; }
+      while (i < text.length) {
+        const ch = text[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (text[i+1] === '"') { field += '"'; i++; }
+            else { inQuotes = false; }
+          } else { field += ch; }
+        } else {
+          if (ch === '"') inQuotes = true;
+          else if (ch === ',') pushField();
+          else if (ch === '\n') { pushField(); pushRow(); }
+          else if (ch === '\r') { /* ignore */ }
+          else field += ch;
+        }
+        i++;
+      }
+      if (field.length || row.length) { pushField(); pushRow(); }
+      // Convert to objects using header row
+      const header = (rows.shift() || []).map(h => String(h || '').trim());
+      return rows.map(r => Object.fromEntries(header.map((h, idx) => [h, r[idx]])));
+    }
+
+    function normalize(s){ return String(s||'').trim().toLowerCase(); }
+    function isNA(v){ const s = normalize(v); return !s || s === 'n/a'; }
+
+    function normalizeKey(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+    function readSpecField(row, logical){
+      const target = normalizeKey(logical);
+      const keys = Object.keys(row || {});
+      for (const k of keys){ if (normalizeKey(k) === target) return row[k]; }
+      return '';
+    }
+    function validateHistoryAgainstSpec(historyData, specRows, ids){
+      // Build normalized lookup from CSV by EntityStep
+      const csvRows = Array.isArray(specRows) ? specRows : [];
+      const toStep = (o) => normalize(o.EntityStep || o.ENTITYSTEP || o.entitystep);
+      const toStatus = (o) => normalize(o.WorkObjectStatus || o.WORKOBJECTSTATUS || o.workobjectstatus);
+      const csvMap = new Map(); // stepNorm -> array of csv objects
+      for (const r of csvRows){
+        const k = toStep(r); if (!k) continue;
+        const arr = csvMap.get(k) || []; arr.push(r); csvMap.set(k, arr);
+      }
+
+      // Indices from history
+      const histCols = (historyData.columns || []).map(c => String(c||''));
+      const up = histCols.map(c => c.toUpperCase());
+      const idxStep = up.indexOf('ENTITYSTEP');
+      const idxStatus = up.indexOf('WORKOBJECTSTATUS');
+
+      // Pick latest row for duplicate ENTITYSTEPs using timestamp columns (CREATEDATETIME or PXCREATEDATETIME)
+      const idxCreated = up.indexOf('CREATEDATETIME');
+      const idxPxCreated = up.indexOf('PXCREATEDATETIME');
+      function parseDateSafe(v){
+        try {
+          if (v && typeof v === 'string') { const d = new Date(v); if (!isNaN(d.getTime())) return d.getTime(); }
+          return 0;
+        } catch { return 0; }
+      }
+      const latestByStep = new Map(); // stepNorm -> { row, ts }
+      for (const r of (historyData.rows || [])){
+        const hStep = String(r[idxStep] || '').trim();
+        const stepNorm = normalize(hStep);
+        const ts = Math.max(parseDateSafe(r[idxCreated]), parseDateSafe(r[idxPxCreated]));
+        const prev = latestByStep.get(stepNorm);
+        if (!prev || ts >= prev.ts) { latestByStep.set(stepNorm, { row: r, ts }); }
+      }
+
+      const outCols = ['ValidationStatus', 'Reason', 'EntityStep', 'WorkObjectStatus', ...histCols];
+      const outRows = [];
+      for (const [stepNorm, obj] of latestByStep.entries()){
+        const r = obj.row;
+        const hStep = String(r[idxStep] || '').trim();
+        const hStatus = normalize(r[idxStatus] || '');
+        const matches = csvMap.get(stepNorm) || [];
+        let validation = '';
+        let reason = '';
+        let csvStepOut = '';
+        let csvStatusOut = '';
+        if (!matches.length){
+          validation = 'NO Record Found';
+          reason = 'No matching EntityStep in sheet';
+        } else {
+          const csvRow = matches[0];
+          csvStepOut = String(csvRow.EntityStep || csvRow.ENTITYSTEP || csvRow.entitystep || '').trim();
+          const csvStatusNorm = toStatus(csvRow);
+          csvStatusOut = String(csvRow.WorkObjectStatus || csvRow.WORKOBJECTSTATUS || csvRow.workobjectstatus || '').trim();
+          const ok = (hStatus === csvStatusNorm);
+          validation = ok ? 'PASS' : 'FAIL';
+          reason = ok ? 'success' : 'WorkObjectStatus mismatch';
+        }
+        outRows.push([validation, reason, csvStepOut, csvStatusOut, ...r]);
+      }
+      return { columns: outCols, rows: outRows, ids };
+    }
+
+    function renderValidationOutcome(outcome){
+      const ids = outcome.ids || {};
+      const safe = (v) => { const s = String(v || '').trim(); return s ? escapeHtml(s) : 'N/A'; };
+      const headerHtml = `
+        <div class="kv" style="margin-bottom:8px;">
+          <div class="k">CARTID</div><div>${safe(ids.cartid)}</div>
+          <div class="k">ORDERNUMBER</div><div>${safe(ids.ordernumber)}</div>
+          <div class="k">LOCATIONCODE</div><div>${safe(ids.locationcode)}</div>
+          <div class="k">MTN</div><div>${safe(ids.mtn)}</div>
+        </div>
+        <div class="actions" style="margin:8px 0;">
+          <button id="downloadValidationCsv" class="secondary">Download Validation CSV</button>
+        </div>`;
+      return headerHtml + buildTableHtml(outcome.columns, outcome.rows, { clickableCart: false });
+    }
+
+    async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn) {
+      const params = {};
+      const selects = [];
+      const base = `SELECT * FROM POJO_data.vzcm_data_orderhistory sub WHERE`;
+      const isEmpty = (v) => !v || !String(v).trim() || String(v).trim().toUpperCase() === 'N/A';
+      if (!isEmpty(cartid)) { params.cartid = String(cartid).trim(); selects.push(`${base} sub.cartid = :cartid`); }
+      if (!isEmpty(ordernumber) && !isEmpty(locationcode)) { params.ordernumber = String(ordernumber).trim(); params.locationcode = String(locationcode).trim(); selects.push(`${base} (sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)`); }
+      if (!isEmpty(mtn)) { params.mtn = String(mtn).trim(); selects.push(`${base} sub.mtn = :mtn`); }
+      if (selects.length === 0) { return { columns: [], rows: [] }; }
+      const sql = `${selects.join(' UNION ')}`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 5000 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'History query failed');
+      return data;
+    }
+
+    function collectHierarchyKeys(root) {
+      const cartid = (document.querySelector('.node.root') || root)?.getAttribute('data-cartid') || '';
+      const orderPairs = Array.from(document.querySelectorAll('.node.order')).map(n => ({
+        ordernumber: n.getAttribute('data-ordernumber') || '',
+        locationcode: n.getAttribute('data-locationcode') || ''
+      })).filter(p => (p.ordernumber || '').trim() && (p.locationcode || '').trim() && p.ordernumber.toUpperCase() !== 'N/A' && p.locationcode.toUpperCase() !== 'N/A');
+      const mtns = Array.from(document.querySelectorAll('.node.line')).map(n => (n.getAttribute('data-mtn') || '')).filter(m => (m || '').trim() && m.toUpperCase() !== 'N/A');
+      return { cartid, orderPairs, mtns };
+    }
+
+    async function fetchOrderHistoryAllKeys(cartid, orderPairs, mtns) {
+      const params = {};
+      const selects = [];
+      const base = `SELECT * FROM POJO_data.vzcm_data_orderhistory sub WHERE`;
+      const isEmpty = (v) => !v || !String(v).trim() || String(v).trim().toUpperCase() === 'N/A';
+      if (!isEmpty(cartid)) { params.cartid = String(cartid).trim(); selects.push(`${base} sub.cartid = :cartid`); }
+      for (let i = 0; i < (orderPairs || []).length; i++) {
+        const p = orderPairs[i];
+        if (!isEmpty(p.ordernumber) && !isEmpty(p.locationcode)) {
+          const onKey = `ordernumber_${i}`;
+          const lcKey = `locationcode_${i}`;
+          params[onKey] = String(p.ordernumber).trim();
+          params[lcKey] = String(p.locationcode).trim();
+          selects.push(`${base} (sub.ordernumber = :${onKey} AND sub.locationcode = :${lcKey})`);
+        }
+      }
+      for (let j = 0; j < (mtns || []).length; j++) {
+        const m = mtns[j];
+        if (!isEmpty(m)) {
+          const mKey = `mtn_${j}`;
+          params[mKey] = String(m).trim();
+          selects.push(`${base} sub.mtn = :${mKey}`);
+        }
+      }
+      if (selects.length === 0) { return { columns: [], rows: [] }; }
+      const sql = `${selects.join(' UNION ')}`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 8000 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'History query failed');
+      return data;
+    }
+
     btnOrderSnapshots.addEventListener('click', () => {
       renderSnapshotsForm();
     });
@@ -1309,6 +1696,113 @@ FETCH FIRST 1 ROWS ONLY`;
 
     // Default view
     renderSnapshotsForm();
+
+    // Validation helpers (reuse spec from WOS if present)
+    function normalize(s){ return String(s||'').trim().toLowerCase(); }
+    function isNA(v){ const s = normalize(v); return !s || s === 'n/a'; }
+
+    function validateHistoryAgainstSpec(historyData, specRows, ids){
+      const cols = (historyData.columns || []).map(c => String(c||''));
+      const up = cols.map(c => c.toUpperCase());
+      const idxStep = up.indexOf('ENTITYSTEP');
+      const idxStatus = up.indexOf('WORKOBJECTSTATUS');
+      const idxCart = up.indexOf('CARTID');
+      const idxOrd = up.indexOf('ORDERNUMBER');
+      const idxLoc = up.indexOf('LOCATIONCODE');
+      const idxMtn = up.indexOf('MTN') >= 0 ? up.indexOf('MTN') : (up.indexOf('ORDER_MTN') >= 0 ? up.indexOf('ORDER_MTN') : up.indexOf('LINE_MTN'));
+      const spec = (specRows || []).map(r => {
+        const stepRaw = String(readSpecField(r, 'EntityStep') || '').trim();
+        const statusRaw = String(readSpecField(r, 'WorkObjectStatus') || '').trim();
+        return {
+          stepNorm: normalize(stepRaw),
+          stepRaw,
+          statusNorm: normalize(statusRaw),
+          statusRaw
+        };
+      }).filter(x => x.stepNorm);
+      const outCols = ['RESULT','REASON','EXPECTED_ENTITYSTEP','EXPECTED_WORKOBJECTSTATUS','ENTITYSTEP','WORKOBJECTSTATUS','CARTID','ORDERNUMBER','LOCATIONCODE','MTN'];
+      const outRows = [];
+      for (const r of (historyData.rows || [])){
+        const hStep = String(r[idxStep] || '').trim();
+        const hStatusRaw = String(r[idxStatus] || '').trim();
+        const hStatusNorm = normalize(hStatusRaw);
+        const cart = r[idxCart];
+        const ord = r[idxOrd];
+        const loc = r[idxLoc];
+        const mtn = idxMtn >= 0 ? r[idxMtn] : '';
+        const hStepNorm = normalize(hStep);
+        const matches = spec.filter(s => s.stepNorm && hStepNorm === s.stepNorm);
+        if (!matches.length){
+          outRows.push(['FAIL','No matching EntityStep in sheet', '', '', hStep, hStatusRaw, cart, ord, loc, mtn]);
+        } else {
+          const ok = matches.some(s => {
+            const sIsNA = /^n\/?a$/i.test(s.statusRaw) || s.statusNorm === 'na';
+            const hIsNA = /^n\/?a$/i.test(hStatusRaw) || hStatusNorm === 'na';
+            return hStatusNorm === s.statusNorm || (hIsNA && sIsNA) || (hStatusRaw === '' && s.statusRaw === '');
+          });
+          const m = matches[0];
+          if (ok){
+            outRows.push(['PASS','success', m.stepRaw, m.statusRaw, hStep, hStatusRaw, cart, ord, loc, mtn]);
+          } else {
+            outRows.push(['FAIL','WorkObjectStatus is mismatched', m.stepRaw, m.statusRaw, hStep, hStatusRaw, cart, ord, loc, mtn]);
+          }
+        }
+      }
+      return { columns: outCols, rows: outRows, ids };
+    }
+
+    async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn) {
+      const params = {};
+      const selects = [];
+      const base = `SELECT * FROM POJO_data.vzcm_data_orderhistory sub WHERE`;
+      if (!isNA(cartid)) { params.cartid = String(cartid).trim(); selects.push(`${base} sub.cartid = :cartid`); }
+      if (!isNA(ordernumber) && !isNA(locationcode)) { params.ordernumber = String(ordernumber).trim(); params.locationcode = String(locationcode).trim(); selects.push(`${base} (sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)`); }
+      if (!isNA(mtn)) { params.mtn = String(mtn).trim(); selects.push(`${base} sub.mtn = :mtn`); }
+      if (selects.length === 0) { return { columns: [], rows: [] }; }
+      const sql = `${selects.join(' UNION ')}`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 500 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'History query failed');
+      return data;
+    }
+
+    // Delegate Validate clicks
+    results.addEventListener('click', async (e) => {
+      const btn = e.target.closest('.ov-validate-btn');
+      if (!btn) return;
+      const cartid = btn.getAttribute('data-cartid') || '';
+      const ordernumber = btn.getAttribute('data-ordernumber') || '';
+      const locationcode = btn.getAttribute('data-locationcode') || '';
+      const mtn = btn.getAttribute('data-mtn') || '';
+      const specRows = (window.__validationSpecCache && window.__validationSpecCache.rows) ? window.__validationSpecCache.rows : null;
+      if (!specRows || !Array.isArray(specRows) || specRows.length === 0) {
+        alert('Validation sheet not loaded. Please upload the CSV in WOS page and retry.');
+        return;
+      }
+      btn.disabled = true;
+      openModal('Validate Against Spreadsheet', '<div class="note">Running validation... <span class="spinner"></span></div>');
+      try {
+        const hist = await fetchOrderHistory(cartid, ordernumber, locationcode, mtn);
+        const ids = { cartid, ordernumber, locationcode, mtn };
+        const outcome = validateHistoryAgainstSpec(hist, specRows, ids);
+        const html = renderValidationOutcome(outcome);
+        const contentEl = document.getElementById('detailModalContent');
+        contentEl.innerHTML = html;
+        const dl = document.getElementById('downloadValidationCsv');
+        if (dl) {
+          dl.addEventListener('click', () => {
+            const csv = buildCsv(outcome.columns, outcome.rows);
+            const fname = `validation_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+            downloadCsv(fname, csv);
+          }, { once: true });
+        }
+      } catch (err) {
+        console.error('Validation error', err);
+        openModal('Error', `<div class="error">${escapeHtml(err.message)}</div>`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>

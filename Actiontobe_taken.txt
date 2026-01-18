@@ -1,0 +1,16 @@
+Notes and limits
+
+Writing results back into “a separate tab in the same spreadsheet” requires Google Sheets API credentials or an Apps Script web app. Since the CSV is public read-only, I implemented local CSV export. If you can provide a service account JSON or an Apps Script endpoint, I can wire a “Push to Sheet” button next.
+The entitystep matching is substring-based as requested. If you want exact matches or regex support, I can add a toggle.
+Want me to:
+
+Add a global “Validate All Visible Rows” that batches and zips multiple result CSVs?
+Wire up Google Sheets write via Apps Script if you provide a Web App URL?
+
+need to pass timestamp in query
+ query	
+ 
+ Case created is wrong
+ Duplicate enrry validation. latest record check
+ 
+ Createdata should be added for cart level table for all query

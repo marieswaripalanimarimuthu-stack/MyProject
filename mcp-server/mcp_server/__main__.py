@@ -54,6 +54,7 @@ WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath
 # UI likely at JiraAgent/mcp-client/ui/index.html
 UI_INDEX_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "index.html")
 UI_QUEUE_SNAPSHOT_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "queue_snapshot.html")
+UI_ORDER_VALIDATION_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "order_validation.html")
 
 def _fetch_binary(url: str) -> bytes:
     """Fetch binary content from a URL with browser-like headers and optional cookie."""
@@ -1237,8 +1238,73 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path in ("/reporting.csv", "/Reporting.csv"):
+            # Serve the Reporting.csv file content if present
+            report_path = os.path.join(WORKSPACE_ROOT, "Reporting.csv")
+            if os.path.exists(report_path):
+                try:
+                    with open(report_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            else:
+                self._json(404, {"error": "Reporting.csv not found"})
+            return
+        if parsed.path == "/proxy":
+            try:
+                qs = parse_qs(parsed.query)
+                url = (qs.get("url") or [""])[0]
+                if not url:
+                    self._json(400, {"error": "Missing 'url'"})
+                    return
+                # Basic allowlist: only allow Google Docs/Sheets CSV publishes
+                if not (url.startswith("https://docs.google.com/") or url.startswith("http://docs.google.com/")):
+                    self._json(400, {"error": "URL not allowed"})
+                    return
+                req = urllib.request.Request(url)
+                req.add_header("User-Agent", "JiraAgent/1.0 (+Windows) Python-urllib")
+                req.add_header("Accept", "text/csv, */*")
+                # Use system proxies if set (HTTPS_PROXY/HTTP_PROXY)
+                proxies = {}
+                hp = os.environ.get("HTTP_PROXY", "").strip()
+                sp = os.environ.get("HTTPS_PROXY", "").strip()
+                if hp:
+                    proxies["http"] = hp
+                if sp:
+                    proxies["https"] = sp
+                ctx = ssl.create_default_context()
+                handlers = [urllib.request.HTTPSHandler(context=ctx)]
+                if proxies:
+                    handlers.insert(0, urllib.request.ProxyHandler(proxies))
+                opener = urllib.request.build_opener(*handlers)
+                with opener.open(req) as resp:
+                    data = resp.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", resp.headers.get("Content-Type", "text/plain"))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+            except Exception as e:
+                try:
+                    msg = str(e)
+                except Exception:
+                    msg = ""
+                print(f"[MCP Server] /proxy error: {msg}")
+                self._json(500, {"error": str(e)})
+            return
         if parsed.path in ("/", "/index.html", "/ui", "/ui/index.html"):
-            self._static_html(UI_INDEX_PATH)
+            # Serve View Hierarchy page by default
+            self._static_html(UI_ORDER_VALIDATION_PATH)
+            return
+        if parsed.path in ("/order-validation", "/ui/order_validation.html"):
+            self._static_html(UI_ORDER_VALIDATION_PATH)
             return
         if parsed.path in ("/queue-snapshot", "/ui/queue_snapshot.html"):
             self._static_html(UI_QUEUE_SNAPSHOT_PATH)
@@ -1948,6 +2014,91 @@ class Handler(BaseHTTPRequestHandler):
                     msg = ""
                 print(f"[MCP Server] /oracle/query error: {msg}")
                 self._json(500, {"error": msg})
+            return
+        if parsed.path == "/validate/log":
+            # Log validation results to terminal for each row
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                columns = payload.get("columns") or []
+                rows = payload.get("rows") or []
+                ids = payload.get("ids") or {}
+                # Print header/context
+                print("[MCP Server] /validate/log context:", ids)
+                # Print each row in a readable format
+                # Map indices for common columns (support both old and new schemas)
+                up = [str(c or '').upper() for c in columns]
+                # Old schema fields
+                i_res_old = up.index('RESULT') if 'RESULT' in up else -1
+                i_step_old = up.index('ENTITYSTEP') if 'ENTITYSTEP' in up else -1
+                i_status_old = up.index('WORKOBJECTSTATUS') if 'WORKOBJECTSTATUS' in up else -1
+                # New schema fields
+                i_val = up.index('VALIDATIONSTATUS') if 'VALIDATIONSTATUS' in up else -1
+                i_step_new = up.index('OH_ENTITYSTEP') if 'OH_ENTITYSTEP' in up else (up.index('ENTITYSTEP') if 'ENTITYSTEP' in up else -1)
+                i_status_new = up.index('OH_WORKOBJECTSTATUS') if 'OH_WORKOBJECTSTATUS' in up else (up.index('WORKOBJECTSTATUS') if 'WORKOBJECTSTATUS' in up else -1)
+                for idx, r in enumerate(rows):
+                    try:
+                        # Prefer new schema
+                        val = r[i_val] if i_val >= 0 else (r[i_res_old] if i_res_old >= 0 else '')
+                        step = r[i_step_new] if i_step_new >= 0 else (r[i_step_old] if i_step_old >= 0 else '')
+                        status = r[i_status_new] if i_status_new >= 0 else (r[i_status_old] if i_status_old >= 0 else '')
+                        print(f"[VALIDATE] row={idx+1} entitystep={step} workobjectstatus={status} validationstatus={val}")
+                    except Exception as e:
+                        print(f"[VALIDATE] row={idx+1} print error: {e}")
+                self._json(200, {"ok": True, "logged": len(rows)})
+            except Exception as e:
+                try:
+                    msg = str(e)
+                except Exception:
+                    msg = ""
+                print(f"[MCP Server] /validate/log error: {msg}")
+                self._json(500, {"error": msg})
+            return
+        if parsed.path == "/reporting/append":
+            # Append a single summary row to Reporting.csv: CARTID, ORDERNUMBER, LOCATIONCODE, TIMESTAMP
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                ids = payload.get("ids") or {}
+                downloaded_file = payload.get("downloadedFile") or ""
+                try:
+                    print(f"[MCP Server] /reporting/append received: ids_cartid={ids.get('cartid','')} file={downloaded_file}")
+                except Exception:
+                    pass
+
+                report_path = os.path.join(WORKSPACE_ROOT, "Reporting.csv")
+                os.makedirs(os.path.dirname(report_path), exist_ok=True)
+                header = ["CARTID","ORDERNUMBER","LOCATIONCODE","MTN","TIMESTAMP"]
+                now_iso = time.strftime('%Y-%m-%dT%H:%M:%S')
+                def esc(v):
+                    s = '' if v is None else str(v)
+                    if any(ch in s for ch in ['\n','\r',',','"']):
+                        return '"' + s.replace('"','""') + '"'
+                    return s
+                try:
+                    write_header = not os.path.exists(report_path)
+                    with open(report_path, "a", encoding="utf-8") as f:
+                        if write_header:
+                            f.write(",".join(header) + "\n")
+                        out = [
+                            esc(ids.get('cartid') or ''),
+                            esc(ids.get('ordernumber') or ''),
+                            esc(ids.get('locationcode') or ''),
+                            esc(ids.get('mtn') or ''),
+                            esc(now_iso)
+                        ]
+                        f.write(",".join(out) + "\n")
+                    try:
+                        print(f"[MCP Server] /reporting/append wrote 1 row to {report_path}")
+                    except Exception:
+                        pass
+                    self._json(200, {"ok": True, "appended": 1, "path": report_path})
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
             return
         if parsed.path == "/jira/update":
             try:

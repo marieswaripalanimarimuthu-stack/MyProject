@@ -1,0 +1,11 @@
+$body = @'
+{
+  "ids": { "cartid":"TESTCART", "ordernumber":"", "locationcode":"", "mtn":"" },
+  "columns": ["RESULT","REASON","EXPECTED_ENTITYSTEP","EXPECTED_WORKOBJECTSTATUS","ENTITYSTEP","WORKOBJECTSTATUS","CARTID","ORDERNUMBER","LOCATIONCODE","MTN"],
+  "rows": [["PASS","success","Step1","Status1","Step1","Status1","TESTCART","","",""]],
+  "downloadedFile": "test.csv"
+}
+'@
+
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8765/reporting/append -ContentType 'application/json' -Body $body
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8765/reporting.csv | Out-String | Write-Output

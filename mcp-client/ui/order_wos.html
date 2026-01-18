@@ -461,14 +461,27 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
     function buildTableHtml(columns, rows, opts) {
       if (!columns.length) { return '<div class="note">No columns returned.</div>'; }
       const clickableCart = !opts || opts.clickableCart !== false;
+      const withValidate = !!(opts && opts.withValidate);
       const upCols = columns.map(c => String(c || '').toUpperCase());
       const idxCart = upCols.indexOf('CARTID');
       const idxOrd = upCols.indexOf('ORDERNUMBER');
       const idxLoc = upCols.indexOf('LOCATIONCODE');
       const idxMtn = upCols.indexOf('MTN') >= 0 ? upCols.indexOf('MTN') : (upCols.indexOf('ORDER_MTN') >= 0 ? upCols.indexOf('ORDER_MTN') : upCols.indexOf('LINE_MTN'));
-      const thead = '<thead><tr>' + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
+      const idxResult = upCols.indexOf('RESULT');
+      const idxReason = upCols.indexOf('REASON');
+      const thead = '<thead><tr>' + (withValidate ? '<th>Validate</th>' : '') + columns.map(c => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead>';
       const tbody = '<tbody>' + rows.map(r => {
-        return '<tr>' + r.map((v, i) => {
+        const validateCell = (() => {
+          if (!withValidate) return '';
+          try {
+            const cart = idxCart >= 0 ? r[idxCart] : '';
+            const ord = idxOrd >= 0 ? r[idxOrd] : '';
+            const loc = idxLoc >= 0 ? r[idxLoc] : '';
+            const mtn = idxMtn >= 0 ? r[idxMtn] : '';
+            return `<td><button class="wos-validate-btn" data-cartid="${escapeHtml(String(cart||''))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">Validate</button></td>`;
+          } catch { return '<td></td>'; }
+        })();
+        return '<tr>' + validateCell + r.map((v, i) => {
           const orig = v;
           const raw = (orig === null || orig === undefined || (typeof orig === 'string' && orig.trim() === '')) ? 'N/A' : orig;
           if (i === idxCart && raw !== 'N/A' && clickableCart) {
@@ -476,6 +489,13 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
             const loc = idxLoc >= 0 ? r[idxLoc] : '';
             const mtn = idxMtn >= 0 ? r[idxMtn] : '';
             return `<td><button class="wos-cart-btn" data-cartid="${escapeHtml(String(orig||''))}" data-ordernumber="${escapeHtml(String(ord||''))}" data-locationcode="${escapeHtml(String(loc||''))}" data-mtn="${escapeHtml(String(mtn||''))}">${escapeHtml(String(raw))}</button></td>`;
+          }
+          if (i === idxReason) {
+            const res = idxResult >= 0 ? String(r[idxResult] || '').trim().toUpperCase() : '';
+            const reasonText = String(raw || '').trim();
+            const isSuccess = res === 'PASS' && reasonText.toLowerCase() === 'success';
+            const style = isSuccess ? 'color:#188038;font-weight:600;' : 'color:#d93025;';
+            return `<td><span style="${style}">${escapeHtml(reasonText || 'N/A')}</span></td>`;
           }
           return `<td>${escapeHtml(raw)}</td>`;
         }).join('') + '</tr>';
@@ -543,6 +563,11 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
               <option value="500">500</option>
             </select>
           </div>
+          <div class="field">
+            <label for="validationCsvFile">Validation Spreadsheet (CSV upload)</label>
+            <input id="validationCsvFile" type="file" accept=".csv,text/csv" />
+            <div id="validationCsvInfo" class="note"></div>
+          </div>
         </div>
         <div class="actions" style="margin-top:8px;">
           <button id="btnExport" type="button" class="secondary" disabled>Export CSV</button>
@@ -578,6 +603,8 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       const btnCopySql = document.getElementById('btnCopySql');
       const rowLimitSel = document.getElementById('rowLimit');
       const btnExport = document.getElementById('btnExport');
+      const validationCsvFile = document.getElementById('validationCsvFile');
+      const validationCsvInfo = document.getElementById('validationCsvInfo');
       const btnLoadAllStatuses = document.getElementById('btnLoadAllStatuses');
       const btnCopyAllStatuses = document.getElementById('btnCopyAllStatuses');
       const dumpSpinner = document.getElementById('dumpSpinner');
@@ -588,7 +615,8 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
         entitySel.disabled = !!on;
         if (on) { statusSel.disabled = true; btnSubmit.disabled = true; }
       }
-      function setSubmitEnabled(enabled) { btnSubmit.disabled = !enabled; }
+      function isValidationCsvReady(){ return Array.isArray(window.__validationSpecCache) && window.__validationSpecCache.length > 0; }
+      function setSubmitEnabled(enabled) { btnSubmit.disabled = !(enabled && isValidationCsvReady()); }
 
       entitySel.addEventListener('change', async () => {
         const entity = entitySel.value;
@@ -650,6 +678,49 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
         }
       });
 
+      // Load validation CSV from local file as fallback
+      function parseCsv(text) {
+        const rows = [];
+        let i = 0, field = '', row = [], inQuotes = false;
+        function pushField(){ row.push(field); field = ''; }
+        function pushRow(){ rows.push(row); row = []; }
+        while (i < text.length) {
+          const ch = text[i];
+          if (inQuotes) {
+            if (ch === '"') { if (text[i+1] === '"') { field += '"'; i++; } else { inQuotes = false; } }
+            else { field += ch; }
+          } else {
+            if (ch === '"') inQuotes = true;
+            else if (ch === ',') pushField();
+            else if (ch === '\n') { pushField(); pushRow(); }
+            else if (ch === '\r') { /* ignore */ }
+            else field += ch;
+          }
+          i++;
+        }
+        if (field.length || row.length) { pushField(); pushRow(); }
+        const header = (rows.shift() || []).map(h => String(h || '').trim());
+        return rows.map(r => Object.fromEntries(header.map((h, idx) => [h, r[idx]])));
+      }
+      validationCsvFile.addEventListener('change', async (e) => {
+        try {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const text = await file.text();
+          const spec = parseCsv(text);
+          window.__validationSpecCache = spec;
+          validationCsvInfo.textContent = `Loaded ${spec.length} rows from ${file.name}`;
+          showToast('Validation CSV loaded');
+          // Enable submit if other conditions are met
+          setSubmitEnabled(true);
+        } catch (err) {
+          console.error('CSV upload error', err);
+          validationCsvInfo.textContent = 'Failed to load CSV';
+          // Keep submit disabled until CSV is valid
+          btnSubmit.disabled = true;
+        }
+      });
+
       btnCopyAllStatuses.addEventListener('click', async () => {
         try {
           const jsonEl = document.getElementById('statusDumpJson');
@@ -691,7 +762,7 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
             <div class="metric">${heading}</div>
             <div class="metric">No of records: <span id="totalCount">calculating...</span></div>
             <div class="metric">Rows returned: ${rows.length}</div>
-          ` + buildTableHtml(cols, rows);
+          ` + buildTableHtml(cols, rows, { withValidate: true });
           // Save for export and enable button
           window.__lastWosData = { columns: cols, rows: rows };
           btnExport.disabled = rows.length === 0;
@@ -712,7 +783,7 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
               if (el) el.textContent = 'error';
             }
           })();
-          // Wire cart button clicks for history pop-up
+          // Wire cart button clicks for history pop-up AND validate buttons
           results.addEventListener('click', async (e) => {
             const btn = e.target.closest('.wos-cart-btn');
             if (!btn) return;
@@ -787,6 +858,41 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
               btn.disabled = false;
             }
           }, { once: false });
+
+          // Separate listener for Validate buttons (delegate on results)
+          results.addEventListener('click', async (e) => {
+            const vbtn = e.target.closest('.wos-validate-btn');
+            if (!vbtn) return;
+            const cartid = vbtn.getAttribute('data-cartid') || '';
+            const ordernumber = vbtn.getAttribute('data-ordernumber') || '';
+            const locationcode = vbtn.getAttribute('data-locationcode') || '';
+            const mtn = vbtn.getAttribute('data-mtn') || '';
+            try {
+              vbtn.disabled = true;
+              openModal('Validate Against Spreadsheet', '<div class="note">Running validation... <span class="spinner"></span></div>');
+              const [hist, spec] = await Promise.all([
+                fetchOrderHistory(cartid, ordernumber, locationcode, mtn),
+                fetchValidationSpec()
+              ]);
+              const outcome = validateHistoryAgainstSpec(hist, spec, { cartid, ordernumber, locationcode, mtn });
+              const contentEl = document.getElementById('detailModalContent');
+              contentEl.innerHTML = renderValidationOutcome(outcome);
+              const dl = document.getElementById('downloadValidationCsv');
+              if (dl) {
+                dl.addEventListener('click', () => {
+                  const csv = buildCsv(outcome.columns, outcome.rows);
+                  const idPart = (cartid || `${ordernumber}_${locationcode}` || mtn || 'unknown').toString().replace(/[^A-Za-z0-9_-]/g,'-');
+                  downloadCsv(`validation_${idPart}.csv`, csv);
+                });
+              }
+            } catch (err) {
+              console.error('Validation error', err);
+              const contentEl = document.getElementById('detailModalContent');
+              contentEl.innerHTML = `<div class="error">${escapeHtml(err.message || 'Validation failed')}</div>`;
+            } finally {
+              vbtn.disabled = false;
+            }
+          });
         } catch (e) {
           console.error('WOS error', e);
           results.innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`;
@@ -844,6 +950,123 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
 
     // Optional: render the form on load for convenience
     // renderWosForm();
+    const VALIDATION_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQDmu-SAkrPf0PRSEd8KcVF2niQ0WH2V7QBsikf-OuPatJX_3IdeYWbfngbakNiJx_PW3n81QPVx9UQ/pub?gid=1368082964&single=true&output=csv';
+    async function fetchValidationSpec() {
+      // If user uploaded locally, use that first
+      if (Array.isArray(window.__validationSpecCache) && window.__validationSpecCache.length) {
+        return window.__validationSpecCache;
+      }
+      // Prefer server proxy to avoid CORS from local UI
+      try {
+        const prox = await fetch(`http://127.0.0.1:8765/proxy?url=${encodeURIComponent(VALIDATION_CSV_URL)}`);
+        if (prox.ok) return parseCsv(await prox.text());
+      } catch {}
+      try {
+        const res = await fetch(VALIDATION_CSV_URL);
+        if (res.ok) return parseCsv(await res.text());
+        throw new Error(await res.text());
+      } catch (e) {
+        throw new Error('Failed to load validation spreadsheet CSV');
+      }
+    }
+
+    function parseCsv(text) {
+      // Minimal CSV parser with quotes handling
+      const rows = [];
+      let i = 0, field = '', row = [], inQuotes = false;
+      function pushField(){ row.push(field); field = ''; }
+      function pushRow(){ rows.push(row); row = []; }
+      while (i < text.length) {
+        const ch = text[i];
+        if (inQuotes) {
+          if (ch === '"') {
+            if (text[i+1] === '"') { field += '"'; i++; }
+            else { inQuotes = false; }
+          } else { field += ch; }
+        } else {
+          if (ch === '"') inQuotes = true;
+          else if (ch === ',') pushField();
+          else if (ch === '\n') { pushField(); pushRow(); }
+          else if (ch === '\r') { /* ignore */ }
+          else field += ch;
+        }
+        i++;
+      }
+      if (field.length || row.length) { pushField(); pushRow(); }
+      // Convert to objects using header row
+      const header = (rows.shift() || []).map(h => String(h || '').trim());
+      return rows.map(r => Object.fromEntries(header.map((h, idx) => [h, r[idx]])));
+    }
+
+    function normalize(s){ return String(s||'').trim().toLowerCase(); }
+    function isNA(v){ const s = normalize(v); return !s || s === 'n/a'; }
+
+    function validateHistoryAgainstSpec(historyData, specRows, ids){
+      const cols = (historyData.columns || []).map(c => String(c||''));
+      const up = cols.map(c => c.toUpperCase());
+      const idxStep = up.indexOf('ENTITYSTEP');
+      const idxStatus = up.indexOf('WORKOBJECTSTATUS');
+      const idxCart = up.indexOf('CARTID');
+      const idxOrd = up.indexOf('ORDERNUMBER');
+      const idxLoc = up.indexOf('LOCATIONCODE');
+      const idxMtn = up.indexOf('MTN') >= 0 ? up.indexOf('MTN') : (up.indexOf('ORDER_MTN') >= 0 ? up.indexOf('ORDER_MTN') : up.indexOf('LINE_MTN'));
+      const spec = (specRows || []).map(r => ({
+        stepNorm: normalize(r.EntityStep || r.ENTITYSTEP || r.entitystep),
+        stepRaw: String(r.EntityStep || r.ENTITYSTEP || r.entitystep || '').trim(),
+        statusNorm: normalize(r.WorkObjectStatus || r.WORKOBJECTSTATUS || r.workobjectstatus),
+        statusRaw: String(r.WorkObjectStatus || r.WORKOBJECTSTATUS || r.workobjectstatus || '').trim()
+      })).filter(x => x.stepNorm);
+      const outCols = ['RESULT','REASON','CARTID','ORDERNUMBER','LOCATIONCODE','MTN','ENTITYSTEP','WORKOBJECTSTATUS','MATCHED_ENTITYSTEP','EXPECTED_WORKOBJECTSTATUS'];
+      const outRows = [];
+      for (const r of (historyData.rows || [])){
+        const hStep = String(r[idxStep] || '').trim();
+        const hStatusRaw = String(r[idxStatus] || '').trim();
+        const hStatusNorm = normalize(hStatusRaw);
+        const cart = r[idxCart];
+        const ord = r[idxOrd];
+        const loc = r[idxLoc];
+        const mtn = idxMtn >= 0 ? r[idxMtn] : '';
+        const hStepNorm = normalize(hStep);
+        const matches = spec.filter(s => s.stepNorm && hStepNorm === s.stepNorm);
+        if (!matches.length){
+          outRows.push(['FAIL','No matching EntityStep in sheet', cart, ord, loc, mtn, hStep, hStatusRaw, '', '']);
+        } else {
+          const ok = matches.some(s => {
+            const sIsNA = /^n\/?a$/i.test(s.statusRaw) || s.statusNorm === 'na';
+            const hIsNA = /^n\/?a$/i.test(hStatusRaw) || hStatusNorm === 'na';
+            return hStatusNorm === s.statusNorm || (hIsNA && sIsNA) || (hStatusRaw === '' && s.statusRaw === '');
+          });
+          if (ok){
+            const m = matches.find(s => {
+              const sIsNA = /^n\/?a$/i.test(s.statusRaw) || s.statusNorm === 'na';
+              const hIsNA = /^n\/?a$/i.test(hStatusRaw) || hStatusNorm === 'na';
+              return hStatusNorm === s.statusNorm || (hIsNA && sIsNA) || (hStatusRaw === '' && s.statusRaw === '');
+            }) || matches[0];
+            outRows.push(['PASS','success', cart, ord, loc, mtn, hStep, hStatusRaw, m.stepRaw, m.statusRaw]);
+          } else {
+            const m = matches[0];
+            outRows.push(['FAIL','WorkObjectStatus is mismatched', cart, ord, loc, mtn, hStep, hStatusRaw, m.stepRaw, m.statusRaw]);
+          }
+        }
+      }
+      return { columns: outCols, rows: outRows, ids };
+    }
+
+    function renderValidationOutcome(outcome){
+      const ids = outcome.ids || {};
+      const safe = (v) => { const s = String(v || '').trim(); return s ? escapeHtml(s) : 'N/A'; };
+      const headerHtml = `
+        <div class="kv" style="margin-bottom:8px;">
+          <div class="k">CARTID</div><div>${safe(ids.cartid)}</div>
+          <div class="k">ORDERNUMBER</div><div>${safe(ids.ordernumber)}</div>
+          <div class="k">LOCATIONCODE</div><div>${safe(ids.locationcode)}</div>
+          <div class="k">MTN</div><div>${safe(ids.mtn)}</div>
+        </div>
+        <div class="actions" style="margin:8px 0;">
+          <button id="downloadValidationCsv" class="secondary">Download Validation CSV</button>
+        </div>`;
+      return headerHtml + buildTableHtml(outcome.columns, outcome.rows, { clickableCart: false });
+    }
     async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn) {
       const params = {};
       const selects = [];
@@ -855,7 +1078,7 @@ WHERE sub.WORKOBJECTSTATUS = :status`;
       if (!isNA(mtn)) { params.mtn = String(mtn).trim(); selects.push(`${base} sub.mtn = :mtn`); }
       // Fallback: if no keys provided, return empty
       if (selects.length === 0) { return { columns: [], rows: [] }; }
-      const sql = `${selects.join(' UNION ALL ')} ORDER BY CREATEDATETIME DESC`;
+      const sql = `${selects.join(' UNION ')} ORDER BY CREATEDATETIME DESC`;
       console.log('History SQL:', sql, params);
       const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 500 }) });
       const data = await resp.json();
