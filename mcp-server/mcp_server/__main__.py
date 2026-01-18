@@ -55,6 +55,7 @@ WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath
 UI_INDEX_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "index.html")
 UI_QUEUE_SNAPSHOT_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "queue_snapshot.html")
 UI_ORDER_VALIDATION_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "order_validation.html")
+UI_HEALTHCHECK_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "healthcheck.html")
 
 def _fetch_binary(url: str) -> bytes:
     """Fetch binary content from a URL with browser-like headers and optional cookie."""
@@ -1306,6 +1307,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/order-validation", "/ui/order_validation.html"):
             self._static_html(UI_ORDER_VALIDATION_PATH)
             return
+        if parsed.path in ("/healthcheck", "/ui/healthcheck.html"):
+            self._static_html(UI_HEALTHCHECK_PATH)
+            return
         if parsed.path in ("/queue-snapshot", "/ui/queue_snapshot.html"):
             self._static_html(UI_QUEUE_SNAPSHOT_PATH)
             return
@@ -1915,6 +1919,55 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/mail/send":
+            # Send an email with HTML body using SMTP envs
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                payload = json.loads(raw.decode("utf-8"))
+                to_addr = (payload.get("to") or "").strip()
+                subject = (payload.get("subject") or "CJCM Healthcheck").strip()
+                html_body = payload.get("html") or ""
+                SMTP_HOST = os.environ.get("SMTP_HOST", "")
+                SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
+                SMTP_USER = os.environ.get("SMTP_USER", "")
+                SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+                SMTP_FROM = os.environ.get("SMTP_FROM", SMTP_USER or "")
+                if not to_addr:
+                    self._json(400, {"error": "Missing 'to'"})
+                    return
+                if SMTP_HOST and SMTP_FROM:
+                    try:
+                        import smtplib
+                        from email.mime.multipart import MIMEMultipart
+                        from email.mime.text import MIMEText
+                        msg = MIMEMultipart('alternative')
+                        msg['Subject'] = subject
+                        msg['From'] = SMTP_FROM
+                        msg['To'] = to_addr
+                        part = MIMEText(html_body, 'html')
+                        msg.attach(part)
+                        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+                            server.starttls()
+                            if SMTP_USER and SMTP_PASSWORD:
+                                server.login(SMTP_USER, SMTP_PASSWORD)
+                            server.sendmail(SMTP_FROM, [to_addr], msg.as_string())
+                        self._json(200, {"ok": True, "sent": True})
+                        return
+                    except Exception as e:
+                        # Fall through to preview
+                        print(f"[MCP Server] /mail/send SMTP error: {e}")
+                # Preview fallback: write HTML to workspace and return URL
+                try:
+                    preview_path = os.path.join(WORKSPACE_ROOT, "healthcheck_email_preview.html")
+                    with open(preview_path, "w", encoding="utf-8") as f:
+                        f.write(html_body)
+                    self._json(200, {"ok": False, "previewPath": preview_path, "previewUrl": "/healthcheck"})
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if parsed.path == "/repo/push":
             # Stage, commit, and push repo changes. Body: {commitMessage?, pushGitHub?, pushGitLab?}
             try:
