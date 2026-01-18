@@ -2,9 +2,9 @@ SELECT COUNT(*) AS CNT FROM POJO_data.vzcm_data_ordersubmitentity sub WHERE sub.
 
 
 
-https://gitlab.verizon.com/V776133/cjcm_ordervaldation/-/tree/github-sync?ref_type=heads
+https://gitlab.verizon.com/V776133/cjcm_ordervaldation/-/tree/github-sync?ref_type=heads - Mirror.No need manaul update
 
-https://github.com/marieswaripalanimarimuthu-stack/MyProject
+https://github.com/marieswaripalanimarimuthu-stack/MyProject - Manual
 
 Working query
 ---------------

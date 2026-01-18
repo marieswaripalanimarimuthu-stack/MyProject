@@ -10,6 +10,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from typing import Optional, List
+import socket
 try:
     import pdfplumber  # for parsing tables from PDFs
 except Exception:
@@ -1239,6 +1240,59 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/debug/oracle":
+            # Quick diagnostics for Oracle DSN and DNS resolution
+            try:
+                dsn = ORACLE_DSN
+                user = ORACLE_USER
+                present = {"ORACLE_DSN": bool(dsn), "ORACLE_USER": bool(user), "ORACLE_PASSWORD": bool(ORACLE_PASSWORD)}
+                def extract_host_port(dsn_str: str):
+                    if not isinstance(dsn_str, str):
+                        return None, None
+                    s = dsn_str.strip()
+                    # Try EZCONNECT host[:port][/service]
+                    if "(DESCRIPTION=" not in s and "HOST=" not in s:
+                        # Split off service
+                        left = s.split("/")[0]
+                        host = left
+                        port = None
+                        if ":" in left:
+                            host, pr = left.split(":", 1)
+                            try:
+                                port = int(pr)
+                            except Exception:
+                                port = None
+                        return host or None, port
+                    # TNS-like string: find HOST=... and optional PORT=...
+                    import re
+                    m = re.search(r"HOST\s*=\s*([^\)\s]+)", s, flags=re.IGNORECASE)
+                    host = m.group(1) if m else None
+                    mp = re.search(r"PORT\s*=\s*(\d+)", s, flags=re.IGNORECASE)
+                    port = int(mp.group(1)) if mp else None
+                    return host, port
+                host, port = extract_host_port(dsn or "")
+                dns_ok = False
+                addrs = []
+                err = None
+                if host:
+                    try:
+                        infos = socket.getaddrinfo(host, port or 0)
+                        dns_ok = True
+                        addrs = sorted({ai[4][0] for ai in infos if ai and ai[4] and ai[4][0]})
+                    except Exception as e:
+                        err = str(e)
+                self._json(200, {
+                    "env": present,
+                    "dsn": dsn or "",
+                    "host": host or "",
+                    "port": port or None,
+                    "dnsResolved": dns_ok,
+                    "addresses": addrs,
+                    "error": err or ""
+                })
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if parsed.path in ("/preview/healthcheck-email",):
             # Serve the healthcheck email preview file if present
             preview_path = os.path.join(WORKSPACE_ROOT, "healthcheck_email_preview.html")
@@ -2064,45 +2118,99 @@ class Handler(BaseHTTPRequestHandler):
                 bind_params = {str(k): v for k, v in (params.items() if isinstance(params, dict) else {})}
                 preview_sql = sql if len(sql) <= 800 else (sql[:800] + "...")
                 print(f"[MCP Server] /oracle/query incoming: maxRows={max_rows} | params={bind_params!r}\nSQL: {preview_sql}")
-                # Connect and run
-                conn = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=ORACLE_DSN)
+                # Connect and run with one retry on transient network disconnects
+                print(f"[MCP Server] /oracle/query using DSN={ORACLE_DSN!r} user={ORACLE_USER!r}")
+                def attempt():
+                    conn = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASSWORD, dsn=ORACLE_DSN)
+                    try:
+                        cur = conn.cursor()
+                        try:
+                            cur.arraysize = max(100, min(max_rows, 1000))
+                        except Exception:
+                            pass
+                        try:
+                            cur.prefetchrows = max(100, min(max_rows, 1000))
+                        except Exception:
+                            pass
+                        t0 = time.time()
+                        # Optional ping to preempt closed sockets
+                        try:
+                            conn.ping()
+                        except Exception:
+                            pass
+                        cur.execute(sql, bind_params)
+                        t1 = time.time()
+                        cols = [d[0] for d in (cur.description or [])]
+                        rows_raw = cur.fetchmany(max_rows)
+                        rows = [[None if v is None else (v.isoformat() if hasattr(v, 'isoformat') else v) for v in r] for r in rows_raw]
+                        count = len(rows)
+                        t2 = time.time()
+                        exec_time = t1 - t0
+                        fetch_time = t2 - t1
+                        total_time = t2 - t0
+                        print(f"[MCP Server] /oracle/query ok: rows={count} cols={len(cols)} exec={exec_time:.3f}s fetch={fetch_time:.3f}s total={total_time:.3f}s")
+                        return {"columns": cols, "rows": rows}
+                    finally:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
                 try:
-                    cur = conn.cursor()
-                    # Tune fetch settings for better performance
-                    try:
-                        cur.arraysize = max(100, min(max_rows, 1000))
-                    except Exception:
-                        pass
-                    try:
-                        cur.prefetchrows = max(100, min(max_rows, 1000))
-                    except Exception:
-                        pass
-                    t0 = time.time()
-                    cur.execute(sql, bind_params)
-                    t1 = time.time()
-                    # Fetch description and rows
-                    cols = [d[0] for d in (cur.description or [])]
-                    rows_raw = cur.fetchmany(max_rows)
-                    rows = [[None if v is None else (v.isoformat() if hasattr(v, 'isoformat') else v) for v in r] for r in rows_raw]
-                    count = len(rows)
-                    t2 = time.time()
-                    exec_time = t1 - t0
-                    fetch_time = t2 - t1
-                    total_time = t2 - t0
-                    print(f"[MCP Server] /oracle/query ok: rows={count} cols={len(cols)} exec={exec_time:.3f}s fetch={fetch_time:.3f}s total={total_time:.3f}s")
-                    self._json(200, {"columns": cols, "rows": rows})
-                finally:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
+                    result = attempt()
+                    self._json(200, result)
+                except Exception as e1:
+                    em = str(e1).lower() if e1 else ""
+                    if ("dpy-4011" in em) or ("10054" in em) or ("connection was forcibly closed" in em) or ("closed the connection" in em):
+                        print("[MCP Server] /oracle/query transient disconnect, retrying once...")
+                        time.sleep(0.3)
+                        try:
+                            result = attempt()
+                            self._json(200, result)
+                            return
+                        except Exception as e2:
+                            raise e2
+                    else:
+                        raise e1
             except Exception as e:
+                # Improve diagnostics for DNS resolution failures
                 try:
                     msg = str(e)
                 except Exception:
                     msg = ""
-                print(f"[MCP Server] /oracle/query error: {msg}")
-                self._json(500, {"error": msg})
+                dns_hint = None
+                try:
+                    # Detect getaddrinfo failures and include DSN/host guidance
+                    em = msg.lower()
+                    if "getaddrinfo failed" in em or isinstance(e, socket.gaierror):
+                        def extract_host(dsn_str: str):
+                            s = (dsn_str or "").strip()
+                            if not s:
+                                return None
+                            if "(DESCRIPTION=" not in s and "HOST=" not in s:
+                                return s.split("/")[0].split(":")[0]
+                            import re
+                            m = re.search(r"HOST\s*=\s*([^\)\s]+)", s, flags=re.IGNORECASE)
+                            return m.group(1) if m else None
+                        host = extract_host(ORACLE_DSN)
+                        dns_hint = {
+                            "message": "DNS resolution failed for Oracle host",
+                            "dsn": ORACLE_DSN,
+                            "host": host or "",
+                            "suggestions": [
+                                "Verify VPN/corporate network is connected",
+                                "Use the DB host IP instead of hostname in ORACLE_DSN",
+                                "Add host entry in C:\\Windows\\System32\\drivers\\etc\\hosts if appropriate",
+                                "Confirm local DNS/proxy does not block internal domains"
+                            ]
+                        }
+                except Exception:
+                    pass
+                if dns_hint:
+                    print(f"[MCP Server] /oracle/query DNS error: {dns_hint}")
+                    self._json(500, {"error": msg, "dns": dns_hint})
+                else:
+                    print(f"[MCP Server] /oracle/query error: {msg}")
+                    self._json(500, {"error": msg})
             return
         if parsed.path == "/validate/log":
             # Log validation results to terminal for each row

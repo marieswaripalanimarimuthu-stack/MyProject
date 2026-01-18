@@ -1,0 +1,59 @@
+EntityStep,WorkObjectStatus
+POJO New Created,Pending-BioCatch
+BioCatch,Pending-MtnAssignment/Pending-FetchOrderDetails
+MTNAssignment,Pending-FetchOrderDetails
+PreOrderWrite,Pending-LoanContractGeneration
+GenerateInstallments,Pending-OrderCaseProcessing
+Handed over to Order Case,Pending-CartStatusUpdate
+UpdateCartStatus,
+Order Level Case Created,Open
+ModifyCredit,Pending-SaveOrderDetails
+CartToOrderConversion,Pending-SaveLoanDetails
+SaveLoan,Pending-InventoryReservation
+SAPOrderCreate(CIB),Pending-SubmitPayment
+submit-payment-2,Pending-FetchTncDetails
+DeriveComputeTnC,Pending-SaveTncDetails
+InsertTnC,Pending-FraudCheckRequest
+FraudCheck,Pending-OrderCompletion
+enforcexmlacknowledgement,Pending-OrderCompletion
+ChargePayment2-WFM,Pending-LineCaseProcessing
+ChargePayment_OrderConfirmationEmail,Pending-LineCaseProcessing
+charge-payment-2,Pending-ServiceOnlyActivation
+Service Only Activation,Pending-CommitOfferDetails
+CommitOffers,Pending-SaveOfferDetails
+saveOffers,Pending-TradeAccountCharge
+POJO New Created,Open
+Add A Line Created,Open
+Line Created,Open
+Item Created,Open
+Handed over to Line Case,Resolved-OrderCompleted
+Post Activation,
+CloseLoan,Pending-DFOLoanClosure
+DFO CloseLoan,Pending-ContractAcceptanceStatusUpdate
+updateContractAcceptanceStatus,Pending-LoanCancelation
+CancelLoan,Pending-LoanActivation
+CreateLoan,Pending-PurchaseDetailsUpdate
+insert-equipment-order,Pending-FulfilmentInitiation
+update-equipment-order,Pending-ShipmentEmail
+RemoveDeliveryBlock,Pending-DcAllocation
+DC Update SAP Callback (InBound),Pending-LogicsticsAllocation
+3PL SAP Callback (InBound),Pending-ShipmentOutOfWarehouse
+Shipment Confirmation SAP Callback (InBound),Pending-InitiateActivation
+get-activation-order-info,Pending-IccidCreation
+personalizationProvisioning,Pending-IccidConfirmation
+confirmPersonalization,Pending-MtnPairing
+PairMtn,Pending-MtnReservationExtension
+extendReservation,Pending-AppleUpdateOnVzMapping
+parkOrder,Pending-AppleUpdateForAppleCarePurchase
+createOrder,Pending-DeviceDetailsUpdate
+Update VOT,Pending-ShipmentEmail
+WFM OrderConfirmation (shipment),Pending-ShipmentEmail
+Shipment Confirmation Email,Pending-MtnPreQualification
+mdnPreQual,Pending-PortInResellerUpdates
+ETNI - PIAK (Inbound),Pending-PortInResellerUpdates
+ETNI - PRSP (Inbound),Pending-PortInResellerUpdates
+ETNI - PACT (Inbound),Pending-ActivationTrigger
+activate,Pending-ActivationNotification
+ORBPM Inbound (LC),Pending-ActivationStatusUpdate
+updateOrderLineActivationStatus,Resolved-LineCompleted
+Post Activation,

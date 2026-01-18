@@ -167,6 +167,117 @@
       return -1;
     }
 
+    // CSV parsing (simple) and spec helpers
+    function parseCsvToObjects(text){
+      const lines = String(text||'').split(/\r?\n/).filter(l => l.trim().length);
+      if (!lines.length) return [];
+      const header = lines.shift().split(',').map(h => h.trim());
+      return lines.map(line => {
+        const vals = line.split(',');
+        const obj = {};
+        for (let i = 0; i < header.length; i++) obj[header[i]] = vals[i] || '';
+        return obj;
+      });
+    }
+    function normalize(s){ return String(s||'').trim().toLowerCase(); }
+    function readSpecField(row, logical){
+      const target = String(logical||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+      const keys = Object.keys(row||{});
+      for (const k of keys){
+        const keyNorm = String(k||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'');
+        if (keyNorm === target) return row[k];
+      }
+      return '';
+    }
+    async function fetchSpecCsv(){
+      // Prefer test.csv in UI directory
+      try {
+        const r = await fetch('test.csv');
+        if (r.ok){ const t = await r.text(); return parseCsvToObjects(t); }
+      } catch {}
+      // Fallback to served UI path
+      try {
+        const r2 = await fetch('http://127.0.0.1:8765/mcp-client/ui/test.csv');
+        if (r2.ok){ const t2 = await r2.text(); return parseCsvToObjects(t2); }
+      } catch {}
+      // Last resort: legacy order_status_mapping.csv if test.csv is absent
+      try {
+        const r3 = await fetch('order_status_mapping.csv');
+        if (r3.ok){ const t3 = await r3.text(); return parseCsvToObjects(t3); }
+      } catch {}
+      try {
+        const r4 = await fetch('http://127.0.0.1:8765/mcp-client/ui/order_status_mapping.csv');
+        if (r4.ok){ const t4 = await r4.text(); return parseCsvToObjects(t4); }
+      } catch {}
+      return [];
+    }
+
+    // Order history fetch for validation
+    async function fetchOrderHistory(cartid, ordernumber, locationcode, mtn){
+      const params = {}; const selects = [];
+      const base = `SELECT * FROM POJO_data.vzcm_data_orderhistory sub WHERE`;
+      const isEmpty = (v) => !v || !String(v).trim() || String(v).trim().toUpperCase() === 'N/A';
+      if (!isEmpty(cartid)) { params.cartid = String(cartid).trim(); selects.push(`${base} sub.cartid = :cartid`); }
+      if (!isEmpty(ordernumber) && !isEmpty(locationcode)) { params.ordernumber = String(ordernumber).trim(); params.locationcode = String(locationcode).trim(); selects.push(`${base} (sub.ordernumber = :ordernumber AND sub.locationcode = :locationcode)`); }
+      if (!isEmpty(mtn)) { params.mtn = String(mtn).trim(); selects.push(`${base} sub.mtn = :mtn`); }
+      if (!selects.length) return { columns: [], rows: [] };
+      const sql = `${selects.join(' UNION ')}`;
+      const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params, maxRows: 5000 }) });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'History query failed');
+      return data;
+    }
+
+    function validateHistoryAgainstSpec(historyData, specRows, ids){
+      const cols = (historyData.columns || []).map(c => String(c||''));
+      const up = cols.map(c => c.toUpperCase());
+      const idxStep = up.indexOf('ENTITYSTEP');
+      const idxStatus = up.indexOf('WORKOBJECTSTATUS');
+      const outCols = ['RESULT','REASON','EXPECTED_ENTITYSTEP','EXPECTED_WORKOBJECTSTATUS','ENTITYSTEP','WORKOBJECTSTATUS'];
+      const spec = (specRows||[]).map(r => {
+        const stepRaw = String(readSpecField(r, 'EntityStep')||'').trim();
+        const statusRaw = String(readSpecField(r, 'WorkObjectStatus')||'').trim();
+        return { stepNorm: normalize(stepRaw), stepRaw, statusNorm: normalize(statusRaw), statusRaw };
+      }).filter(x => x.stepNorm);
+      const outRows = [];
+      for (const row of (historyData.rows||[])){
+        const hStep = String(row[idxStep]||'').trim();
+        const hStatusRaw = String(row[idxStatus]||'').trim();
+        const hStatusNorm = normalize(hStatusRaw);
+        const hStepNorm = normalize(hStep);
+        const matches = spec.filter(s => s.stepNorm === hStepNorm);
+        if (!matches.length){
+          outRows.push(['FAIL','No matching EntityStep in sheet','','', hStep, hStatusRaw]);
+        } else {
+          const ok = matches.some(s => hStatusNorm === s.statusNorm || (hStatusRaw === '' && s.statusRaw === ''));
+          const m = matches[0];
+          outRows.push([ok?'PASS':'FAIL', ok?'success':'WorkObjectStatus is mismatched', m.stepRaw, m.statusRaw, hStep, hStatusRaw]);
+        }
+      }
+      return { columns: outCols, rows: outRows, ids };
+    }
+
+    // Compute max daily count in a pivot row
+    function maxDailyCount(columns, row){
+      const pivotCols = (columns||[]).filter(c => /\d{2}-[A-Za-z]{3}-\d{2}/i.test(String(c||'')));
+      let max = 0;
+      for (let i = 0; i < (columns||[]).length; i++){
+        const col = columns[i];
+        if (pivotCols.includes(col)){
+          const v = Number(row[i]||0);
+          if (!isNaN(v)) max = Math.max(max, v);
+        }
+      }
+      return max;
+    }
+
+    // Read Total column value from a pivot row
+    function totalCount(columns, row){
+      const idx = colIdx(columns || [], 'Total');
+      const v = idx >= 0 ? Number(row[idx] || 0) : 0;
+      return isNaN(v) ? 0 : v;
+    }
+
     // Build detail SQL per hierarchy for a specific WorkObjectStatus within selected window
     function makeDetailSql(hierarchy, status){
       const { start, end } = computeWindow();
@@ -244,7 +355,7 @@ FETCH FIRST 3 ROWS ONLY`;
 
     // Format recent carts list from detail dataset
     function formatRecent(detail){
-      if (!detail || !detail.columns || !detail.rows) return '';
+      if (!detail || !detail.columns || !detail.rows) return 'N/A';
       const cols = detail.columns; const rows = detail.rows;
       const iCart = colIdx(cols, 'CARTID');
       const iOrder = colIdx(cols, 'ORDERNUMBER');
@@ -256,7 +367,8 @@ FETCH FIRST 3 ROWS ONLY`;
         if (iLoc >= 0) s += s ? `/${String(r[iLoc]||'')}` : String(r[iLoc]||'');
         return s;
       });
-      return items.slice(0,3).map(escapeHtml).join(', ');
+      const joined = items.slice(0,3).map(escapeHtml).join(', ');
+      return joined.trim() ? joined : 'N/A';
     }
 
     // Append a "Recent Carts (Top 3)" column to an existing dataset using a details map keyed by status
@@ -281,7 +393,9 @@ FETCH FIRST 3 ROWS ONLY`;
       const statusEl = document.getElementById('status');
       const resultsEl = document.getElementById('results');
       const previewLink = document.getElementById('previewLink');
-      statusEl.innerHTML = 'Loading pivot data... <span class="spinner"></span>';
+      // Clear results and show spinner immediately on click
+      resultsEl.innerHTML = '';
+      statusEl.innerHTML = 'Loading recent carts and sending email... <span class="spinner"></span>';
       previewLink.style.display = 'none';
       try {
         // Build SQLs for each hierarchy (Cart -> Order -> Line)
@@ -304,25 +418,43 @@ FETCH FIRST 3 ROWS ONLY`;
         const rangeInfoEl = document.getElementById('rangeInfo');
         if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText(); }
         resultsEl.innerHTML = pageHtml0;
-        // Now trigger details
-        statusEl.innerHTML = 'Loading recent carts and sending email... <span class="spinner"></span>';
+        // Now trigger details (keep spinner message)
         // Determine top-5 WorkObjectStatus per hierarchy
         const iCartStatus = colIdx(dCart.columns || [], 'WORKOBJECTSTATUS');
         const iOrderStatus = colIdx(dOrder.columns || [], 'WORKOBJECTSTATUS');
         const iLineStatus = colIdx(dLine.columns || [], 'WORKOBJECTSTATUS');
-        const topCartStatuses = (dCart.rows || []).slice(0,5).map(r => iCartStatus>=0 ? String(r[iCartStatus]||'') : '').filter(s => s);
-        const topOrderStatuses = (dOrder.rows || []).slice(0,5).map(r => iOrderStatus>=0 ? String(r[iOrderStatus]||'') : '').filter(s => s);
-        const topLineStatuses = (dLine.rows || []).slice(0,5).map(r => iLineStatus>=0 ? String(r[iLineStatus]||'') : '').filter(s => s);
+        // Only trigger details when Total > 20000
+        const topCartStatuses = (dCart.rows || [])
+          .slice(0,5)
+          .filter(r => totalCount(dCart.columns || [], r) > 20000)
+          .map(r => iCartStatus>=0 ? String(r[iCartStatus]||'') : '')
+          .filter(s => s);
+        const topOrderStatuses = (dOrder.rows || [])
+          .slice(0,5)
+          .filter(r => totalCount(dOrder.columns || [], r) > 20000)
+          .map(r => iOrderStatus>=0 ? String(r[iOrderStatus]||'') : '')
+          .filter(s => s);
+        const topLineStatuses = (dLine.rows || [])
+          .slice(0,5)
+          .filter(r => totalCount(dLine.columns || [], r) > 20000)
+          .map(r => iLineStatus>=0 ? String(r[iLineStatus]||'') : '')
+          .filter(s => s);
 
         // Fetch recent carts per status (3 rows)
         const fetchDetail = async (hier, statuses) => {
+          // Sequential fetching to avoid network/DB connection resets
           const m = {};
-          const reqs = statuses.map(st => fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: makeDetailSql(hier, st), params: {}, maxRows: 25 }) })
-            .then(resp => resp.json().then(d => ({ status: st, data: d, ok: resp.ok })).catch(() => ({ status: st, data: {}, ok: false })))
-            .catch(() => ({ status: st, data: {}, ok: false }))
-          );
-          const all = await Promise.all(reqs);
-          all.forEach(x => { if (x.ok) m[x.status] = x.data; });
+          for (const st of statuses){
+            try {
+              const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: makeDetailSql(hier, st), params: {}, maxRows: 25 }) });
+              const d = await resp.json();
+              if (resp.ok) m[st] = d;
+            } catch {
+              // ignore
+            }
+            // small delay to avoid rapid-fire connections
+            await new Promise(r => setTimeout(r, 75));
+          }
           return m;
         };
         const [cartDet, orderDet, lineDet] = await Promise.all([
@@ -331,10 +463,101 @@ FETCH FIRST 3 ROWS ONLY`;
           fetchDetail('line', topLineStatuses)
         ]);
 
-        // Append recent carts column
-        const cartAug = appendRecentColumn(dCart, cartDet);
-        const orderAug = appendRecentColumn(dOrder, orderDet);
-        const lineAug = appendRecentColumn(dLine, lineDet);
+        // Load spec CSV for validation
+        const specRows = await fetchSpecCsv();
+
+        // Build per-status recent most cart with validation, honoring thresholds
+        async function buildValidatedMap(hier, dataset, detMap){
+          const out = {};
+          const cols = dataset.columns||[]; const idxStatus = colIdx(cols, 'WORKOBJECTSTATUS');
+          for (let rIdx = 0; rIdx < Math.min(5, (dataset.rows||[]).length); rIdx++){
+            const row = dataset.rows[rIdx];
+            const status = idxStatus>=0 ? String(row[idxStatus]||'') : '';
+            if (!status) continue;
+            const t = totalCount(cols, row);
+            if (!(t > 20000)) continue; // trigger only if Total > 20000
+            // Fetch most recent cart row
+            const det = detMap[status];
+            const dcols = det && det.columns || []; const drows = det && det.rows || [];
+            const iCart = colIdx(dcols, 'CARTID');
+            const iOrd = colIdx(dcols, 'ORDERNUMBER');
+            const iLoc = colIdx(dcols, 'LOCATIONCODE');
+            let cartid = (iCart>=0 && drows[0]) ? drows[0][iCart] : '';
+            let ordernumber = (iOrd>=0 && drows[0]) ? drows[0][iOrd] : '';
+            let locationcode = (iLoc>=0 && drows[0]) ? drows[0][iLoc] : '';
+            let mtn = '';
+            // Fill missing fields for CART/ORDER
+            if (hier === 'cart'){
+              // Get ORDERNUMBER/LOCATIONCODE
+              try {
+                const sql = `SELECT ORDERNUMBER, LOCATIONCODE FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid AND CLIENTTYPE = 'Digital' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
+                const resp = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sql, params: { cartid }, maxRows: 5 }) });
+                const data = await resp.json();
+                if (resp.ok){
+                  const cOn = colIdx(data.columns||[], 'ORDERNUMBER');
+                  const cLc = colIdx(data.columns||[], 'LOCATIONCODE');
+                  if ((data.rows||[])[0]){
+                    ordernumber = (data.rows[0][cOn]||ordernumber);
+                    locationcode = (data.rows[0][cLc]||locationcode);
+                  }
+                }
+              } catch {}
+            }
+            if (hier === 'order' || hier === 'cart'){
+              // Get MTN from lineentity for CARTID
+              try {
+                const sql2 = `SELECT MTN FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid AND CLIENTTYPE = 'Digital' AND LINEACTIVITYTYPE = 'AAL' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
+                const resp2 = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sql: sql2, params: { cartid }, maxRows: 5 }) });
+                const data2 = await resp2.json();
+                if (resp2.ok){
+                  const iM = colIdx(data2.columns||[], 'MTN') >= 0 ? colIdx(data2.columns||[], 'MTN') : (colIdx(data2.columns||[], 'ORDER_MTN')>=0 ? colIdx(data2.columns||[], 'ORDER_MTN') : colIdx(data2.columns||[], 'LINE_MTN'));
+                  mtn = (data2.rows||[])[0] ? data2.rows[0][iM] : '';
+                }
+              } catch {}
+            } else if (hier === 'line'){
+              // For line, MTN may already be part of history, but keep as '' here; validation uses orderhistory fields.
+            }
+            // Validate against spec
+            try {
+              const hist = await fetchOrderHistory(cartid, ordernumber, locationcode, mtn);
+              const v = validateHistoryAgainstSpec(hist, specRows, { cartid, ordernumber, locationcode, mtn });
+              const pass = (v.rows||[]).every(r => r[0] === 'PASS');
+              out[status] = { cartid, ordernumber, locationcode, mtn, result: pass ? 'PASS' : 'FAIL' };
+            } catch {
+              out[status] = { cartid, ordernumber, locationcode, mtn, result: '' };
+            }
+          }
+          return out;
+        }
+        const [cartVal, orderVal, lineVal] = await Promise.all([
+          buildValidatedMap('cart', dCart, cartDet),
+          buildValidatedMap('order', dOrder, orderDet),
+          buildValidatedMap('line', dLine, lineDet)
+        ]);
+
+        // Append recent most cart with validation result column
+        function appendValidatedColumn(dataset, valMap){
+          const columns = dataset.columns||[]; const rows = dataset.rows||[];
+          const idxStatus = colIdx(columns, 'WORKOBJECTSTATUS');
+          const newCols = columns.concat(['Recent Cart (Most)']);
+          const newRows = rows.map((r, i) => {
+            let extra = 'N/A';
+            if (i < 5 && idxStatus>=0){
+              const st = String(r[idxStatus]||'');
+              const info = valMap[st];
+              if (info && info.cartid){
+                const badge = info.result ? ` [${info.result}]` : '';
+                extra = `${escapeHtml(info.cartid)}${badge}`;
+              }
+            }
+            return r.concat([extra]);
+          });
+          return { columns: newCols, rows: newRows };
+        }
+
+        const cartAug = appendValidatedColumn(dCart, cartVal);
+        const orderAug = appendValidatedColumn(dOrder, orderVal);
+        const lineAug = appendValidatedColumn(dLine, lineVal);
 
         const hCart = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Cart</h3>` + buildTable(cartAug.columns, cartAug.rows, { highlightFirst: 5 });
         const hOrder = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Order</h3>` + buildTable(orderAug.columns, orderAug.rows, { highlightFirst: 5 });
