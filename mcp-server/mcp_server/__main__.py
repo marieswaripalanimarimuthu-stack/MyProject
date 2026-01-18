@@ -2078,7 +2078,9 @@ class Handler(BaseHTTPRequestHandler):
                 status = run("git status --porcelain")
                 results["status"] = status
                 if status.get("out", "").strip():
-                    results["commit"] = run(f"git commit -m \"{msg.replace('\\','/').replace('"','\\"')}\"")
+                    #results["commit"] = run(f"git commit -m \"{msg.replace('\\','/').replace('"','\\"')}\"")
+                    # Use single quotes for the f-string to avoid quote conflicts inside replace()
+                    results["commit"] = run(f'git commit -m "{msg.replace("\\","/").replace("\"", "\\\"")}"')
                 else:
                     results["commit"] = {"code": 0, "out": "No changes to commit", "err": ""}
                 # Push to GitHub (origin)
