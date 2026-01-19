@@ -1,0 +1,11 @@
+Push-Location "C:\Users\v776133\Downloads\JiraAgent"; git status; git remote -v  
+
+ Push-Location "C:\Users\v776133\Downloads\JiraAgent"; git add -A; git commit -m "Healthcheck: pivot-first flow, recent carts column, email borders + zero-fill, helpers restored, My changes"   
+ 
+ 
+ Push-Location "C:\Users\v776133\Downloads\JiraAgent"; git push origin main    
+ 
+ 
+git add mcp-server/mcp_server/__main__.py
+git commit -m "Fix SyntaxError: escaped quotes in git commit f-string"
+git push origin main

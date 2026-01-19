@@ -1385,6 +1385,55 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/queue-snapshot", "/ui/queue_snapshot.html"):
             self._static_html(UI_QUEUE_SNAPSHOT_PATH)
             return
+        # Serve static files under mcp-client/ui (CSV/JSON/HTML). Also map /test.csv to UI folder.
+        if parsed.path == "/test.csv":
+            file_path = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "test.csv")
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/csv; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            else:
+                self._json(404, {"error": "test.csv not found in mcp-client/ui"})
+            return
+        if parsed.path.startswith("/mcp-client/ui/"):
+            rel = parsed.path.replace("/mcp-client/ui/", "", 1)
+            safe_rel = os.path.normpath(rel).replace("\\", "/")
+            # Prevent path traversal
+            if safe_rel.startswith(".."):
+                self._json(400, {"error": "Invalid path"})
+                return
+            file_path = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", safe_rel)
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        data = f.read()
+                    # Simple content-type guess
+                    ct = "text/plain; charset=utf-8"
+                    if file_path.endswith(".csv"):
+                        ct = "text/csv; charset=utf-8"
+                    elif file_path.endswith(".json"):
+                        ct = "application/json; charset=utf-8"
+                    elif file_path.endswith(".html"):
+                        ct = "text/html; charset=utf-8"
+                    self.send_response(200)
+                    self.send_header("Content-Type", ct)
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except Exception as e:
+                    self._json(500, {"error": str(e)})
+            else:
+                self._json(404, {"error": f"File not found: {safe_rel}"})
+            return
         if parsed.path == "/releaseplan/vcg-milestones-2026":
             try:
                 url = "https://releaseplan.ebiz.verizon.com/uploads/files/keymilestones.pdf"
@@ -2008,6 +2057,7 @@ class Handler(BaseHTTPRequestHandler):
                     cc_list = []
                 subject = (payload.get("subject") or "CJCM Healthcheck").strip()
                 html_body = payload.get("html") or ""
+                attachments = payload.get("attachments") or []
                 SMTP_HOST = os.environ.get("SMTP_HOST", "")
                 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587") or "587")
                 SMTP_USER = os.environ.get("SMTP_USER", "")
@@ -2022,6 +2072,8 @@ class Handler(BaseHTTPRequestHandler):
                         import smtplib
                         from email.mime.multipart import MIMEMultipart
                         from email.mime.text import MIMEText
+                        from email.mime.base import MIMEBase
+                        from email import encoders
                         msg = MIMEMultipart('alternative')
                         msg['Subject'] = subject
                         msg['From'] = SMTP_FROM
@@ -2030,6 +2082,41 @@ class Handler(BaseHTTPRequestHandler):
                             msg['Cc'] = ", ".join(cc_list)
                         part = MIMEText(html_body, 'html')
                         msg.attach(part)
+                        # Handle attachments: items may be {filename, contentBase64, contentType} or {path}
+                        def attach_bytes(name: str, data: bytes, ctype: str = 'application/octet-stream'):
+                            try:
+                                base = MIMEBase(*ctype.split('/', 1))
+                            except Exception:
+                                base = MIMEBase('application', 'octet-stream')
+                            base.set_payload(data)
+                            encoders.encode_base64(base)
+                            base.add_header('Content-Disposition', 'attachment', filename=name)
+                            msg.attach(base)
+                        for att in attachments:
+                            try:
+                                if isinstance(att, dict) and att.get('path'):
+                                    # Resolve relative to workspace
+                                    p = att.get('path')
+                                    fp = p
+                                    if not os.path.isabs(fp):
+                                        fp = os.path.join(WORKSPACE_ROOT, p.lstrip('/\\'))
+                                    if os.path.exists(fp):
+                                        with open(fp, 'rb') as f:
+                                            data = f.read()
+                                        name = os.path.basename(fp)
+                                        ctype = att.get('contentType') or ('text/csv' if name.lower().endswith('.csv') else 'application/octet-stream')
+                                        attach_bytes(name, data, ctype)
+                                elif isinstance(att, dict) and att.get('filename') and att.get('contentBase64'):
+                                    name = str(att.get('filename'))
+                                    ctype = att.get('contentType') or ('text/csv' if name.lower().endswith('.csv') else 'application/octet-stream')
+                                    try:
+                                        import base64
+                                        data = base64.b64decode(str(att.get('contentBase64')))
+                                        attach_bytes(name, data, ctype)
+                                    except Exception as e:
+                                        print(f"[MCP Server] /mail/send attach decode error: {e}")
+                            except Exception as e:
+                                print(f"[MCP Server] /mail/send attach error: {e}")
                         recipients = [to_addr] + cc_list
                         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
                             # Decide TLS behavior: auto enables TLS for non-25; off disables; on forces
@@ -2118,8 +2205,17 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 # Prepare binds and log incoming request to terminal
                 bind_params = {str(k): v for k, v in (params.items() if isinstance(params, dict) else {})}
-                preview_sql = sql if len(sql) <= 800 else (sql[:800] + "...")
-                print(f"[MCP Server] /oracle/query incoming: maxRows={max_rows} | params={bind_params!r}\nSQL: {preview_sql}")
+                action = (payload.get("action") or "SQL").strip()
+                print("[MCP Server] ================================")
+                print(f"[MCP Server] Action: {action}")
+                print("[MCP Server] --------------------------------")
+                print(f"[MCP Server] Params: {bind_params!r}")
+                print("[MCP Server] SQL:")
+                try:
+                    print(sql)
+                except Exception:
+                    print(str(sql))
+                print("[MCP Server] ================================")
                 # Connect and run with one retry on transient network disconnects
                 print(f"[MCP Server] /oracle/query using DSN={ORACLE_DSN!r} user={ORACLE_USER!r}")
                 def attempt():
@@ -2255,7 +2351,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(500, {"error": msg})
             return
         if parsed.path == "/reporting/append":
-            # Append a single summary row to Reporting.csv: CARTID, ORDERNUMBER, LOCATIONCODE, TIMESTAMP
+            # Append a single summary row to Reporting.csv: CARTID, ORDERNUMBER, LOCATIONCODE, MTN, PXCREATEDATETIME, FILE
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length) if length > 0 else b"{}"
@@ -2269,8 +2365,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 report_path = os.path.join(WORKSPACE_ROOT, "Reporting.csv")
                 os.makedirs(os.path.dirname(report_path), exist_ok=True)
-                header = ["CARTID","ORDERNUMBER","LOCATIONCODE","MTN","TIMESTAMP"]
-                now_iso = time.strftime('%Y-%m-%dT%H:%M:%S')
+                header = ["CARTID","ORDERNUMBER","LOCATIONCODE","MTN","PXCREATEDATETIME","FILE"]
                 def esc(v):
                     s = '' if v is None else str(v)
                     if any(ch in s for ch in ['\n','\r',',','"']):
@@ -2286,7 +2381,8 @@ class Handler(BaseHTTPRequestHandler):
                             esc(ids.get('ordernumber') or ''),
                             esc(ids.get('locationcode') or ''),
                             esc(ids.get('mtn') or ''),
-                            esc(now_iso)
+                            esc(ids.get('pxcreateddatetime') or ''),
+                            esc(downloaded_file or '')
                         ]
                         f.write(",".join(out) + "\n")
                     try:

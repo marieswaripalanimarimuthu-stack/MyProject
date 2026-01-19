@@ -31,9 +31,18 @@
     <button data-range="8h" type="button">Last 8 hours</button>
     <button data-range="16h" type="button">Last 16 hours</button>
     <button data-range="1d" type="button">Last 1 Day</button>
-    <button data-range="2d" type="button">Last 2 Days</button>
-    <button data-range="3d" type="button">Last 3 Days</button>
+    <span style="margin-left:10px;">Custom (Min 1 day, Max 2 days):</span>
+    <input id="startDate" type="date" />
+    <input id="endDate" type="date" />
+    <label for="clientType" style="margin-left:10px;">ClientType:</label>
+    <select id="clientType">
+      <option value="Digital" selected>Digital</option>
+      <option value="Assisted">Assisted</option>
+      <option value="Indirect">Indirect</option>
+    </select>
+    <button id="runCustom" type="button" disabled>Run</button>
   </div>
+  <div id="rangeWarning" class="note" style="font-size:11px;color:#d93025;display:none;">Max 2 Days</div>
   <a id="previewLink" href="#" target="_blank" style="display:none;">Open email preview</a>
   <div id="rangeInfo" class="note"></div>
   <div id="results"></div>
@@ -42,7 +51,7 @@
     const ORACLE_ENDPOINT = 'http://127.0.0.1:8765/oracle/query';
     const MAIL_ENDPOINT = 'http://127.0.0.1:8765/mail/send';
     // Active window (defaults to last 1 day)
-    let activeWindow = { type: 'relative', value: '1d' };
+    let activeWindow = { type: 'relative', value: '1d', label: 'Last 1 Day' };
     function toDate(s){ const d = new Date(s + 'T00:00:00'); return d; }
     function addDays(d, n){ const x = new Date(d); x.setDate(x.getDate() + n); return x; }
     function addMinutes(d, n){ const x = new Date(d); x.setMinutes(x.getMinutes() + n); return x; }
@@ -61,6 +70,11 @@
         if (v.endsWith('m')){ const mins = parseInt(v); start = addMinutes(now, -mins); }
         else if (v.endsWith('h')){ const hrs = parseInt(v); start = addMinutes(now, -hrs*60); }
         else if (v.endsWith('d')){ const days = parseInt(v); start = addDays(now, -days); }
+      } else if (activeWindow.type === 'absolute'){
+        const s = toDate(activeWindow.startDate);
+        const e = toDate(activeWindow.endDate);
+        start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0);
+        end = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59);
       }
       // Labels: unique set of truncated dates between start and end inclusive
       const labels = [];
@@ -68,6 +82,12 @@
       const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
       while (cur <= endDay){ labels.push(new Date(cur)); cur = addDays(cur, 1); }
       return { start, end, labels };
+    }
+
+    function getClientType(){
+      const sel = document.getElementById('clientType');
+      const v = (sel && sel.value) ? String(sel.value) : 'Digital';
+      return ['Digital','Assisted','Indirect'].includes(v) ? v : 'Digital';
     }
 
     // HTML escape utility used in table rendering
@@ -86,6 +106,7 @@
       const { start, end, labels } = computeWindow();
       const s_ts = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}T${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
       const e_ts = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}T${String(end.getHours()).padStart(2,'0')}:${String(end.getMinutes()).padStart(2,'0')}`;
+      const ct = getClientType().replace(/'/g, "''");
       const pivots = labels.map(d => {
         const y = d.getFullYear();
         const m = String(d.getMonth()+1).padStart(2,'0');
@@ -93,7 +114,7 @@
         const lbl = fmtLabel(d);
         return `TO_DATE('${y}-${m}-${day}', 'YYYY-MM-DD') AS "${lbl}"`;
       }).join(',\n        ');
-      return `SELECT * FROM (\n    SELECT \n        WORKOBJECTSTATUS,\n        TRUNC(PXCREATEDATETIME) as CREATED_DATE,\n        COUNT(*) OVER (PARTITION BY WORKOBJECTSTATUS) as "Total"\n    FROM ${table}\n    WHERE PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') \n                                 AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')\n)\nPIVOT (\n    COUNT(CREATED_DATE) \n    FOR CREATED_DATE IN (\n        ${pivots}\n    )\n)\nORDER BY "Total" DESC`;
+      return `SELECT * FROM (\n    SELECT \n        WORKOBJECTSTATUS,\n        TRUNC(PXCREATEDATETIME) as CREATED_DATE,\n        COUNT(*) OVER (PARTITION BY WORKOBJECTSTATUS) as "Total"\n    FROM ${table}\n    WHERE PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') \n                                 AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')\n      AND CLIENTTYPE = '${ct}'\n)\nPIVOT (\n    COUNT(CREATED_DATE) \n    FOR CREATED_DATE IN (\n        ${pivots}\n    )\n)\nORDER BY "Total" DESC`;
     }
 
     // Subject line range text (e.g., Jan 10 2026 to Jan 12 2026)
@@ -113,6 +134,18 @@
       const sTxt = `${mons[start.getMonth()]} ${start.getDate()} ${start.getFullYear()} ${two(start.getHours())}:${two(start.getMinutes())}`;
       const eTxt = `${mons[end.getMonth()]} ${end.getDate()} ${end.getFullYear()} ${two(end.getHours())}:${two(end.getMinutes())}`;
       return `Date Range: ${sTxt} to ${eTxt}`;
+    }
+
+    // Convert dataset to CSV string, prefixing context columns
+    function toCsv(columns, rows){
+      const escape = v => {
+        const s = String(v==null?'':v);
+        if (/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+        return s;
+      };
+      const header = (columns||[]).map(escape).join(',');
+      const body = (rows||[]).map(r => r.map(escape).join(',')).join('\n');
+      return header + '\n' + body;
     }
 
     // Email-friendly table (with borders, center numeric, fill zeros for pivot/Total)
@@ -190,26 +223,16 @@
       return '';
     }
     async function fetchSpecCsv(){
-      // Prefer test.csv in UI directory
+      // Prefer test.csv in UI directory; if missing, try server-served UI path
       try {
         const r = await fetch('test.csv');
         if (r.ok){ const t = await r.text(); return parseCsvToObjects(t); }
       } catch {}
-      // Fallback to served UI path
       try {
         const r2 = await fetch('http://127.0.0.1:8765/mcp-client/ui/test.csv');
         if (r2.ok){ const t2 = await r2.text(); return parseCsvToObjects(t2); }
       } catch {}
-      // Last resort: legacy order_status_mapping.csv if test.csv is absent
-      try {
-        const r3 = await fetch('order_status_mapping.csv');
-        if (r3.ok){ const t3 = await r3.text(); return parseCsvToObjects(t3); }
-      } catch {}
-      try {
-        const r4 = await fetch('http://127.0.0.1:8765/mcp-client/ui/order_status_mapping.csv');
-        if (r4.ok){ const t4 = await r4.text(); return parseCsvToObjects(t4); }
-      } catch {}
-      return [];
+      throw new Error('Validation spec missing: test.csv not found');
     }
 
     // Order history fetch for validation
@@ -283,6 +306,7 @@
       const { start, end } = computeWindow();
       const s_ts = `${start.getFullYear()}-${String(start.getMonth()+1).padStart(2,'0')}-${String(start.getDate()).padStart(2,'0')}T${String(start.getHours()).padStart(2,'0')}:${String(start.getMinutes()).padStart(2,'0')}`;
       const e_ts = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}-${String(end.getDate()).padStart(2,'0')}T${String(end.getHours()).padStart(2,'0')}:${String(end.getMinutes()).padStart(2,'0')}`;
+      const ct = getClientType().replace(/'/g, "''");
       if (hierarchy === 'line'){
         return `SELECT 
     line.PYSTATUSWORK, 
@@ -303,7 +327,7 @@ INNER JOIN POJO_data.vzcm_data_fulfillmententity ful
 WHERE line.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
   AND line.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
   AND line.LINEACTIVITYTYPE = 'AAL' 
-  AND line.CLIENTTYPE = 'Digital'
+  AND line.CLIENTTYPE = '${ct}'
   AND ful.FULFILLMENTTYPE = 'FFL'
 ORDER BY line.PXCREATEDATETIME DESC
 FETCH FIRST 3 ROWS ONLY`;
@@ -327,7 +351,7 @@ LEFT JOIN POJO_data.vzcm_data_fulfillmententity ful
 WHERE conf.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
   AND conf.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
   AND conf.ORDERACTIVITYTYPE = 'AAL' 
-  AND conf.CLIENTTYPE = 'Digital'
+  AND conf.CLIENTTYPE = '${ct}'
   AND (ful.FULFILLMENTTYPE = 'FFL' OR ful.FULFILLMENTTYPE IS NULL)
 ORDER BY conf.PXCREATEDATETIME DESC
 FETCH FIRST 3 ROWS ONLY`;
@@ -336,6 +360,7 @@ FETCH FIRST 3 ROWS ONLY`;
     sub.PYSTATUSWORK, 
     sub.WORKOBJECTSTATUS,
     sub.CARTID,
+    sub.PXCREATEDATETIME,
     ful.FULFILLMENTTYPE, 
     ful.TRANSACTIONTYPE,
     sub.BIOCATCH_OR, sub.ASSIGNMTN_OR, sub.GENERATEINSTALLMENTSCONTRACTS_OR, 
@@ -346,7 +371,7 @@ INNER JOIN POJO_data.vzcm_data_fulfillmententity ful
     ON sub.CARTID = ful.CARTID
 WHERE sub.WORKOBJECTSTATUS = '${status.replace(/'/g, "''")}'
   AND sub.PXCREATEDATETIME BETWEEN TO_TIMESTAMP('${s_ts}', 'YYYY-MM-DD"T"HH24:MI') AND TO_TIMESTAMP('${e_ts}', 'YYYY-MM-DD"T"HH24:MI')
-  AND sub.CLIENTTYPE = 'Digital'
+  AND sub.CLIENTTYPE = '${ct}'
   AND ful.FULFILLMENTTYPE = 'FFL'
 ORDER BY sub.PXCREATEDATETIME DESC
 FETCH FIRST 3 ROWS ONLY`;
@@ -402,9 +427,9 @@ FETCH FIRST 3 ROWS ONLY`;
         const SQL_SUBMIT = makeSql('POJO_data.vzcm_data_ordersubmitentity');
         const SQL_CONFIRM = makeSql('POJO_data.vzcm_data_orderconfirmationentity');
         const SQL_LINE = makeSql('POJO_data.vzcm_data_lineentity');
-        const pCart = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_SUBMIT, params: {}, maxRows: 5000 }) });
-        const pOrder = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_CONFIRM, params: {}, maxRows: 5000 }) });
-        const pLine = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: SQL_LINE, params: {}, maxRows: 5000 }) });
+        const pCart = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'Pivot: Cart', sql: SQL_SUBMIT, params: {}, maxRows: 5000 }) });
+        const pOrder = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'Pivot: Order', sql: SQL_CONFIRM, params: {}, maxRows: 5000 }) });
+        const pLine = fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'Pivot: Line', sql: SQL_LINE, params: {}, maxRows: 5000 }) });
         const [rCart, rOrder, rLine] = await Promise.all([pCart, pOrder, pLine]);
         const [dCart, dOrder, dLine] = await Promise.all([rCart.json(), rOrder.json(), rLine.json()]);
         if (!rCart.ok) throw new Error(dCart.error || 'Cart query failed');
@@ -416,27 +441,27 @@ FETCH FIRST 3 ROWS ONLY`;
         const hLine0 = `<h3 style=\"margin:12px 0 6px 0;\">Hierarchy: Line</h3>` + buildTable(dLine.columns || [], dLine.rows || [], { highlightFirst: 5 });
         const pageHtml0 = hCart0 + hOrder0 + hLine0;
         const rangeInfoEl = document.getElementById('rangeInfo');
-        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText(); }
+        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText() + ` — ${escapeHtml(activeWindow.label||'')}`; }
         resultsEl.innerHTML = pageHtml0;
         // Now trigger details (keep spinner message)
         // Determine top-5 WorkObjectStatus per hierarchy
         const iCartStatus = colIdx(dCart.columns || [], 'WORKOBJECTSTATUS');
         const iOrderStatus = colIdx(dOrder.columns || [], 'WORKOBJECTSTATUS');
         const iLineStatus = colIdx(dLine.columns || [], 'WORKOBJECTSTATUS');
-        // Only trigger details when Total > 20000
+        // Only trigger details when Total > 1000
         const topCartStatuses = (dCart.rows || [])
           .slice(0,5)
-          .filter(r => totalCount(dCart.columns || [], r) > 20000)
+          .filter(r => totalCount(dCart.columns || [], r) > 1000)
           .map(r => iCartStatus>=0 ? String(r[iCartStatus]||'') : '')
           .filter(s => s);
         const topOrderStatuses = (dOrder.rows || [])
           .slice(0,5)
-          .filter(r => totalCount(dOrder.columns || [], r) > 20000)
+          .filter(r => totalCount(dOrder.columns || [], r) > 1000)
           .map(r => iOrderStatus>=0 ? String(r[iOrderStatus]||'') : '')
           .filter(s => s);
         const topLineStatuses = (dLine.rows || [])
           .slice(0,5)
-          .filter(r => totalCount(dLine.columns || [], r) > 20000)
+          .filter(r => totalCount(dLine.columns || [], r) > 1000)
           .map(r => iLineStatus>=0 ? String(r[iLineStatus]||'') : '')
           .filter(s => s);
 
@@ -446,7 +471,7 @@ FETCH FIRST 3 ROWS ONLY`;
           const m = {};
           for (const st of statuses){
             try {
-              const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: makeDetailSql(hier, st), params: {}, maxRows: 25 }) });
+              const resp = await fetch(ORACLE_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: `Detail: ${hier} status=${st}`, sql: makeDetailSql(hier, st), params: {}, maxRows: 25 }) });
               const d = await resp.json();
               if (resp.ok) m[st] = d;
             } catch {
@@ -475,23 +500,25 @@ FETCH FIRST 3 ROWS ONLY`;
             const status = idxStatus>=0 ? String(row[idxStatus]||'') : '';
             if (!status) continue;
             const t = totalCount(cols, row);
-            if (!(t > 20000)) continue; // trigger only if Total > 20000
+            if (!(t > 1000)) continue; // trigger only if Total > 1000
             // Fetch most recent cart row
             const det = detMap[status];
             const dcols = det && det.columns || []; const drows = det && det.rows || [];
             const iCart = colIdx(dcols, 'CARTID');
             const iOrd = colIdx(dcols, 'ORDERNUMBER');
             const iLoc = colIdx(dcols, 'LOCATIONCODE');
+            const iPx = colIdx(dcols, 'PXCREATEDATETIME');
             let cartid = (iCart>=0 && drows[0]) ? drows[0][iCart] : '';
             let ordernumber = (iOrd>=0 && drows[0]) ? drows[0][iOrd] : '';
             let locationcode = (iLoc>=0 && drows[0]) ? drows[0][iLoc] : '';
             let mtn = '';
+            let pxcreatedatetime = (iPx>=0 && drows[0]) ? drows[0][iPx] : '';
             // Fill missing fields for CART/ORDER
             if (hier === 'cart'){
               // Get ORDERNUMBER/LOCATIONCODE
               try {
-                const sql = `SELECT ORDERNUMBER, LOCATIONCODE FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid AND CLIENTTYPE = 'Digital' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
-                const resp = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sql, params: { cartid }, maxRows: 5 }) });
+                const sql = `SELECT ORDERNUMBER, LOCATIONCODE FROM POJO_data.vzcm_data_orderconfirmationentity WHERE CARTID = :cartid AND CLIENTTYPE = '${getClientType().replace(/'/g,"''")}' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
+                const resp = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action: `OrderConfirm: cart=${cartid}`, sql, params: { cartid }, maxRows: 5 }) });
                 const data = await resp.json();
                 if (resp.ok){
                   const cOn = colIdx(data.columns||[], 'ORDERNUMBER');
@@ -506,8 +533,8 @@ FETCH FIRST 3 ROWS ONLY`;
             if (hier === 'order' || hier === 'cart'){
               // Get MTN from lineentity for CARTID
               try {
-                const sql2 = `SELECT MTN FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid AND CLIENTTYPE = 'Digital' AND LINEACTIVITYTYPE = 'AAL' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
-                const resp2 = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sql: sql2, params: { cartid }, maxRows: 5 }) });
+                const sql2 = `SELECT MTN FROM POJO_data.vzcm_data_lineentity WHERE CARTID = :cartid AND CLIENTTYPE = '${getClientType().replace(/'/g,"''")}' AND LINEACTIVITYTYPE = 'AAL' ORDER BY PXCREATEDATETIME DESC FETCH FIRST 1 ROWS ONLY`;
+                const resp2 = await fetch(ORACLE_ENDPOINT, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ action: `Line MTN: cart=${cartid}`, sql: sql2, params: { cartid }, maxRows: 5 }) });
                 const data2 = await resp2.json();
                 if (resp2.ok){
                   const iM = colIdx(data2.columns||[], 'MTN') >= 0 ? colIdx(data2.columns||[], 'MTN') : (colIdx(data2.columns||[], 'ORDER_MTN')>=0 ? colIdx(data2.columns||[], 'ORDER_MTN') : colIdx(data2.columns||[], 'LINE_MTN'));
@@ -522,9 +549,9 @@ FETCH FIRST 3 ROWS ONLY`;
               const hist = await fetchOrderHistory(cartid, ordernumber, locationcode, mtn);
               const v = validateHistoryAgainstSpec(hist, specRows, { cartid, ordernumber, locationcode, mtn });
               const pass = (v.rows||[]).every(r => r[0] === 'PASS');
-              out[status] = { cartid, ordernumber, locationcode, mtn, result: pass ? 'PASS' : 'FAIL' };
+              out[status] = { cartid, ordernumber, locationcode, mtn, pxcreatedatetime, result: pass ? 'PASS' : 'FAIL', validation: v };
             } catch {
-              out[status] = { cartid, ordernumber, locationcode, mtn, result: '' };
+              out[status] = { cartid, ordernumber, locationcode, mtn, pxcreatedatetime, result: '' };
             }
           }
           return out;
@@ -564,16 +591,65 @@ FETCH FIRST 3 ROWS ONLY`;
         const hLine = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Line</h3>` + buildTable(lineAug.columns, lineAug.rows, { highlightFirst: 5 });
         const pageHtml = hCart + hOrder + hLine;
         // Show browser date-time range below controls
-        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText(); }
+        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText() + ` — ${escapeHtml(activeWindow.label||'')}`; }
         resultsEl.innerHTML = pageHtml;
         // Compose email HTML (no global header; only hierarchy headers)
         const subject = fmtSubjectRange();
-        const emailRange = `<div style="color:#1a73e8;font-weight:700;font-size:14px;margin:4px 0;">${fmtRangeText()}</div>`;
+        const emailRange = `<div style="color:#1a73e8;font-weight:700;font-size:14px;margin:4px 0;">${fmtRangeText()} — ${escapeHtml(activeWindow.label||'')}</div>` +
+               `<div style="font-size:12px;color:#5f6368;margin-bottom:8px;">ClientType: ${escapeHtml(getClientType())}</div>`;
         const eCart = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Cart</h3>` + buildEmailTable(cartAug.columns, cartAug.rows, { highlightFirst: 5 });
         const eOrder = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Order</h3>` + buildEmailTable(orderAug.columns, orderAug.rows, { highlightFirst: 5 });
         const eLine = `<h3 style="margin:12px 0 6px 0;">Hierarchy: Line</h3>` + buildEmailTable(lineAug.columns, lineAug.rows, { highlightFirst: 5 });
         const bodyHtml = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;">${emailRange}${eCart}${eOrder}${eLine}</div>`;
-        const mailResp = await fetch(MAIL_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'marieswari.palanimarimuthu@verizon.com', subject, html: bodyHtml }) });
+        // Prepare attachments: per-cart validated CSVs + Reporting.csv
+        function csvForCart(info){
+          const v = info.validation;
+          if (!v || !v.columns || !v.rows) return null;
+          const cols = ['CARTID','ORDERNUMBER','LOCATIONCODE','MTN'].concat(v.columns);
+          const rows = (v.rows||[]).map(r => [info.cartid||'', info.ordernumber||'', info.locationcode||'', info.mtn||''].concat(r));
+          const csv = toCsv(cols, rows);
+          // UTF-8 safe base64
+          const base64 = btoa(unescape(encodeURIComponent(csv)));
+          const fileName = `${String(info.cartid||'cart')}.csv`;
+          return { filename: fileName, contentBase64: base64, contentType: 'text/csv', csvText: csv };
+        }
+        // Deduplicate carts preferring cart hierarchy
+        const cartEntries = Object.values(cartVal||{}).filter(x => x && x.cartid);
+        const orderEntries = Object.values(orderVal||{}).filter(x => x && x.cartid);
+        const lineEntries = Object.values(lineVal||{}).filter(x => x && x.cartid);
+        const byCart = new Map();
+        for (const e of cartEntries){ byCart.set(String(e.cartid), e); }
+        for (const e of orderEntries){ const k = String(e.cartid); if (!byCart.has(k)) byCart.set(k, e); }
+        for (const e of lineEntries){ const k = String(e.cartid); if (!byCart.has(k)) byCart.set(k, e); }
+        const attachments = [];
+        for (const e of byCart.values()){
+          const a = csvForCart(e);
+          if (a){
+            attachments.push({ filename: a.filename, contentBase64: a.contentBase64, contentType: a.contentType });
+            // Trigger browser download for local copy
+            try {
+              const blob = new Blob([a.csvText], { type: 'text/csv;charset=utf-8' });
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = a.filename;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+            } catch {}
+          }
+          // Append reporting row
+          try {
+            await fetch('http://127.0.0.1:8765/reporting/append', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ ids: { cartid: e.cartid||'', ordernumber: e.ordernumber||'', locationcode: e.locationcode||'', mtn: e.mtn||'', pxcreateddatetime: e.pxcreatedatetime||'' }, downloadedFile: `${String(e.cartid||'cart')}.csv` }) });
+          } catch {}
+        }
+        // Attach Reporting.csv by fetching it
+        try {
+          const r = await fetch('http://127.0.0.1:8765/reporting.csv');
+          if (r.ok){ const txt = await r.text(); const base64 = btoa(unescape(encodeURIComponent(txt))); attachments.push({ filename: 'Reporting.csv', contentBase64: base64, contentType: 'text/csv' }); }
+        } catch {}
+        const mailResp = await fetch(MAIL_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: 'marieswari.palanimarimuthu@verizon.com', subject, html: bodyHtml, attachments }) });
         let mailData = {};
         try { mailData = await mailResp.json(); } catch {}
         if (mailResp.ok && (mailData.ok || mailData.sent)){
@@ -590,10 +666,78 @@ FETCH FIRST 3 ROWS ONLY`;
 
     // Range buttons
     document.querySelectorAll('.ranges button').forEach(btn => {
+      // Skip the custom Run button here; handle separately below
+      if (btn.id === 'runCustom') return;
       btn.addEventListener('click', () => {
-        activeWindow = { type: 'relative', value: btn.getAttribute('data-range') };
+        activeWindow = { type: 'relative', value: btn.getAttribute('data-range'), label: btn.textContent.trim() };
+        const rangeInfoEl = document.getElementById('rangeInfo');
+        if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText() + ` — ${escapeHtml(activeWindow.label||'')}`; }
+        // Clear any custom range warnings and disable Run until dates chosen again
+        const warn = document.getElementById('rangeWarning');
+        const runBtn = document.getElementById('runCustom');
+        if (warn){ warn.style.display = 'none'; warn.textContent = ''; }
+        if (runBtn){ runBtn.disabled = true; }
         runHealthcheck();
       });
+    });
+    // Validate custom date range: Min 1 day, Max 2 days (inclusive)
+    function updateCustomRunState(){
+      const sEl = document.getElementById('startDate');
+      const eEl = document.getElementById('endDate');
+      const runBtn = document.getElementById('runCustom');
+      const warn = document.getElementById('rangeWarning');
+      const s = sEl && sEl.value; const e = eEl && eEl.value;
+      if (!runBtn) return;
+      if (!s || !e){
+        runBtn.disabled = true;
+        if (warn){ warn.style.display = 'none'; warn.textContent = ''; }
+        return;
+      }
+      try {
+        const sd = toDate(s);
+        const ed = toDate(e);
+        // inclusive span in whole days
+        const ms = ed.getTime() - sd.getTime();
+        const span = Math.floor(ms / (1000*60*60*24)) + 1;
+        if (span < 1){
+          runBtn.disabled = true;
+          if (warn){ warn.style.display = 'inline'; warn.textContent = 'Min 1 Day'; }
+        } else if (span > 2){
+          runBtn.disabled = true;
+          if (warn){ warn.style.display = 'inline'; warn.textContent = 'Max 2 Days'; }
+        } else {
+          runBtn.disabled = false;
+          if (warn){ warn.style.display = 'none'; warn.textContent = ''; }
+        }
+      } catch {
+        runBtn.disabled = true;
+        if (warn){ warn.style.display = 'none'; warn.textContent = ''; }
+      }
+    }
+    document.getElementById('startDate').addEventListener('change', updateCustomRunState);
+    document.getElementById('endDate').addEventListener('change', updateCustomRunState);
+    // Also revalidate when client type changes (no effect on span but keep UX consistent)
+    document.getElementById('clientType').addEventListener('change', () => {
+      updateCustomRunState();
+    });
+    // Custom absolute range Run handler (≤2 days enforced by computeWindow clamp)
+    document.getElementById('runCustom').addEventListener('click', () => {
+      const s = document.getElementById('startDate').value;
+      const e = document.getElementById('endDate').value;
+      if (!s || !e){
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'Please select both start and end dates.';
+        return;
+      }
+      // Validate again before run
+      const sd = toDate(s); const ed = toDate(e);
+      const ms = ed.getTime() - sd.getTime();
+      const span = Math.floor(ms / (1000*60*60*24)) + 1;
+      if (span < 1 || span > 2){ updateCustomRunState(); return; }
+      activeWindow = { type: 'absolute', startDate: s, endDate: e, label: `Custom: ${s} → ${e}` };
+      const rangeInfoEl = document.getElementById('rangeInfo');
+      if (rangeInfoEl) { rangeInfoEl.innerHTML = fmtRangeText() + ` — ${escapeHtml(activeWindow.label||'')}`; }
+      runHealthcheck();
     });
     // Do not auto-run on initial load; user must click a range
   </script>
