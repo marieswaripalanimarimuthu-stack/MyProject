@@ -752,6 +752,29 @@ def _build_jql(project: str, assigned_to: Optional[str], issue_type: Optional[st
     return jql
 
 
+def _adf_to_plain_text(node) -> str:
+    """Extract plain text from Jira ADF (Atlassian Document Format) description."""
+    if node is None:
+        return ""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        if node.get("type") == "text" and "text" in node:
+            return node.get("text", "")
+        out = []
+        for key in ("text", "content"):
+            val = node.get(key)
+            if isinstance(val, list):
+                for child in val:
+                    out.append(_adf_to_plain_text(child))
+            elif isinstance(val, dict):
+                out.append(_adf_to_plain_text(val))
+        return " ".join(out)
+    if isinstance(node, list):
+        return " ".join(_adf_to_plain_text(x) for x in node)
+    return ""
+
+
 def _parse_created_and_aging(created_str: str) -> tuple:
     """Parse Jira 'created' (ISO) and return (created_display, aging_days)."""
     if not created_str:
@@ -921,7 +944,8 @@ def fetch_distinct_components_assignees_labels(project_key: str, created_after: 
             "priorities": ["Critical", "High", "Medium", "Low", "Lowest"],
         }
 
-    # Try with date filter first; if no issues or error, retry without date (some Jira versions reject -6m)
+    # Try with date filter first; if no issues, error, or sparse results, retry without date
+    # Sparse = few assignees/labels/statuses (dropdowns need variety for filtering)
     for use_date in (True, False):
         components.clear()
         assignees_list.clear()
@@ -936,9 +960,17 @@ def fetch_distinct_components_assignees_labels(project_key: str, created_after: 
                 _collect(payload)
                 total = payload.get("total", 0)
                 start_at += len(payload.get("issues", []))
-                if start_at >= total or start_at >= 2000:
+                if start_at >= total or start_at >= 5000:
                     break
-            if components or assignees_list or labels or statuses or priorities:
+            # If we got data, check if we should retry without date for better coverage
+            has_data = bool(components or assignees_list or labels or statuses or priorities)
+            if has_data and use_date:
+                # Sparse result from -6m? Retry without date to get broader dropdown options
+                assignees_unique = len(set(a.get("name") or "" for a in assignees_list))
+                if assignees_unique < 3 or len(labels) < 3 or len(statuses) < 3:
+                    print(f"[MCP Server] components-assignees: sparse with date (assignees={assignees_unique}, labels={len(labels)}, statuses={len(statuses)}); retrying without date")
+                    continue
+            if has_data:
                 break
         except Exception as e:
             if not use_date:
@@ -1029,12 +1061,25 @@ def fetch_issue_attachments(issue_key: str):
         return {"issue": issue_key, "attachments": out}
 
 
-def fetch_issue_details(issue_key: str):
+def _get_functional_area_field_id():
+    """Resolve Functional Area(s) field id from Jira field map. Returns None if not found."""
+    try:
+        fm = fetch_fields_map()
+        for name in ("Functional Areas", "Functional Area", "FunctionalArea"):
+            if name in fm:
+                return fm[name]
+    except Exception:
+        pass
+    return None
+
+
+def fetch_issue_details(issue_key: str, include_functional_area: bool = False):
     """Fetch summary fields for an issue: summary, description, created, and comments.
     Returns a consolidatedComments string which concatenates comment bodies in order.
+    If include_functional_area=True, also fetches Functional Areas field.
     """
     if JIRA_MOCK or not (JIRA_BASE_URL and (JIRA_USERNAME or JIRA_EMAIL) and JIRA_API_TOKEN):
-        return {
+        out = {
             "issue": issue_key,
             "summary": "Mock summary",
             "description": "Mock description",
@@ -1046,10 +1091,18 @@ def fetch_issue_details(issue_key: str):
             "consolidatedComments": "First comment\n\nSecond comment",
             "isMock": True,
         }
+        if include_functional_area:
+            out["functionalAreas"] = []
+        return out
 
     api_ver = "2" if JIRA_API_VERSION == "2" else "3"
-    # For v3, description may be a rich text document; we'll return raw value
-    url = f"{JIRA_BASE_URL}/rest/api/{api_ver}/issue/{urllib.parse.quote(issue_key)}?fields=summary,description,created,comment"
+    fields = "summary,description,created,comment"
+    fa_id = None
+    if include_functional_area:
+        fa_id = _get_functional_area_field_id()
+        if fa_id:
+            fields = f"{fields},{fa_id}"
+    url = f"{JIRA_BASE_URL}/rest/api/{api_ver}/issue/{urllib.parse.quote(issue_key)}?fields={fields}"
     user_id = JIRA_USERNAME if JIRA_USERNAME else JIRA_EMAIL
     auth = b64encode(f"{user_id}:{JIRA_API_TOKEN}".encode()).decode()
     req = urllib.request.Request(url)
@@ -1080,7 +1133,24 @@ def fetch_issue_details(issue_key: str):
         # Consolidate comment bodies from latest to oldest
         comments_sorted = sorted(comments, key=lambda x: x.get("created") or "", reverse=True)
         consolidated = "\n\n".join((c.get("body") or "").strip() for c in comments_sorted if (c.get("body") or "").strip())
-        return {
+        functional_areas = []
+        if include_functional_area and fa_id and fa_id in fields:
+            raw = fields.get(fa_id)
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, dict):
+                        val = item.get("value") or item.get("name")
+                        if val:
+                            functional_areas.append(str(val).strip())
+                    elif isinstance(item, str):
+                        functional_areas.append(item.strip())
+            elif isinstance(raw, dict):
+                val = raw.get("value") or raw.get("name")
+                if val:
+                    functional_areas.append(str(val).strip())
+            elif isinstance(raw, str) and raw.strip():
+                functional_areas.append(raw.strip())
+        out = {
             "issue": issue_key,
             "summary": summary,
             "description": description,
@@ -1088,6 +1158,9 @@ def fetch_issue_details(issue_key: str):
             "comments": comments_sorted,
             "consolidatedComments": consolidated,
         }
+        if include_functional_area:
+            out["functionalAreas"] = functional_areas
+        return out
 
 
 def search_similar_issues(issue_key: str, project_keys: list, max_results: int = 20):
@@ -1397,6 +1470,27 @@ def update_issue_fields(issue_key: str, components_names, work_owner_value: Opti
     except Exception as e:
         print(f"[MCP Server] Jira update error: {e}")
         return {"ok": False, "status": 500, "error": str(e)}
+
+def add_issue_labels(issue_key: str, labels_to_add: list) -> dict:
+    """Add labels to a Jira issue without removing existing ones."""
+    if JIRA_MOCK or not (JIRA_BASE_URL and (JIRA_USERNAME or JIRA_EMAIL) and JIRA_API_TOKEN):
+        return {"ok": True, "status": 200, "isMock": True, "labelsAdded": labels_to_add}
+    labels_to_add = [str(l).strip() for l in labels_to_add if str(l).strip()]
+    if not labels_to_add:
+        return {"ok": True, "status": 200, "labelsAdded": []}
+    api_ver = "2" if JIRA_API_VERSION == "2" else "3"
+    url = f"{JIRA_BASE_URL}/rest/api/{api_ver}/issue/{urllib.parse.quote(issue_key)}"
+    patch_body = {"update": {"labels": [{"add": l} for l in labels_to_add]}}
+    body_bytes = json.dumps(patch_body).encode("utf-8")
+    req = _build_jira_request(url, method="PUT", data=body_bytes, content_type="application/json")
+    ctx = ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(req, context=ctx) as resp:
+            return {"ok": True, "status": resp.status, "labelsAdded": labels_to_add}
+    except urllib.error.HTTPError as e:
+        err_text = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else str(e)
+        return {"ok": False, "status": e.code, "error": err_text[:500], "labelsAdded": []}
+
 
 def add_issue_comment(issue_key: str, comment_body: str):
     api_ver = "2" if JIRA_API_VERSION == "2" else "3"
@@ -2308,6 +2402,76 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/jira/suggest-label":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                self._json(400, {"error": f"Invalid JSON: {e}"})
+                return
+            key = body.get("key")
+            title = body.get("title") or body.get("summary") or ""
+            description = body.get("description") or ""
+            functional_areas = []
+            if key:
+                try:
+                    details = fetch_issue_details(key, include_functional_area=True)
+                    title = title or (details.get("summary") or "")
+                    description = description or (details.get("description") or "")
+                    functional_areas = details.get("functionalAreas") or []
+                except Exception:
+                    pass
+            if isinstance(description, dict):
+                description = _adf_to_plain_text(description)
+            else:
+                description = str(description or "")
+            from .label_rules import suggest_label
+            suggested = suggest_label(title, description, functional_areas)
+            self._json(200, {"suggestedLabel": suggested, "title": title[:200], "descriptionLen": len(description), "functionalAreas": functional_areas})
+            return
+
+        if parsed.path == "/jira/apply-defect-label":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                self._json(400, {"error": f"Invalid JSON: {e}"})
+                return
+            key = body.get("key")
+            title = body.get("title") or body.get("summary")
+            description = body.get("description")
+            if not key:
+                self._json(400, {"error": "Missing 'key'"})
+                return
+            try:
+                if title is None or description is None:
+                    details = fetch_issue_details(key, include_functional_area=True)
+                    title = title if title is not None else (details.get("summary") or "")
+                    description = description if description is not None else (details.get("description") or "")
+                    functional_areas = details.get("functionalAreas") or []
+                else:
+                    details = fetch_issue_details(key, include_functional_area=True)
+                    functional_areas = details.get("functionalAreas") or []
+                if isinstance(description, dict):
+                    description = _adf_to_plain_text(description)
+                else:
+                    description = str(description or "")
+                from .label_rules import suggest_label
+                suggested = suggest_label(title, description, functional_areas)
+                if not suggested:
+                    self._json(200, {"ok": True, "key": key, "labelApplied": None, "message": "No label matched"})
+                    return
+                result = add_issue_labels(key, [suggested])
+                result["key"] = key
+                result["labelApplied"] = suggested
+                self._json(200, result)
+            except Exception as e:
+                print(f"[MCP Server] Error in /jira/apply-defect-label: {e}")
+                self._json(500, {"error": str(e)})
+            return
+
         if parsed.path == "/jira/issues":
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length) if length > 0 else b"{}"

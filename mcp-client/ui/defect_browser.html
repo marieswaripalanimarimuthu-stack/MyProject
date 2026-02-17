@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Defect Browser by Component / Assignee / Labels</title>
   <style>
-    body { font-family: Segoe UI, Tahoma, Arial, sans-serif; margin: 24px; background: #f7f7f9; }
+    html { font-size: 14px; }
+    body { font-family: Segoe UI, Tahoma, Arial, sans-serif; margin: 24px auto; max-width: 1200px; padding: 0 16px; background: #f7f7f9; }
     h1 { font-size: 20px; margin-bottom: 16px; color: #1a3b7a; }
     .filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 16px; }
     .filter-group { display: flex; flex-direction: column; gap: 4px; }
@@ -27,6 +28,12 @@
     .pagination-controls button:disabled { cursor: not-allowed; }
     th.sortable { cursor: pointer; user-select: none; }
     th.sortable:hover { text-decoration: underline; }
+    .btn-label { padding: 4px 10px; font-size: 12px; background: #1a3b7a; color: #fff; border: none; border-radius: 4px; cursor: pointer; position: relative; }
+    .btn-label:hover { background: #2a5baa; }
+    .btn-label:disabled { background: #999; cursor: not-allowed; }
+    .btn-label-bulk { margin-left: 12px; padding: 6px 14px; font-size: 13px; }
+    .label-tooltip { position: absolute; left: 50%; transform: translateX(-50%); top: 100%; margin-top: 6px; padding: 6px 10px; background: #333; color: #fff; font-size: 12px; border-radius: 4px; white-space: normal; max-width: min(280px, 90vw); z-index: 200; pointer-events: none; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+    .label-tooltip::after { content: ''; position: absolute; bottom: 100%; left: 50%; margin-left: -5px; border: 5px solid transparent; border-bottom-color: #333; }
     table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
     th { background: #1a3b7a; color: #fff; font-weight: 600; }
@@ -93,6 +100,10 @@
     <div class="filter-group">
       <label>&nbsp;</label>
       <button id="fetchBtn">Fetch Defects</button>
+    </div>
+    <div class="filter-group">
+      <label>&nbsp;</label>
+      <button id="downloadBtn" type="button" disabled title="Download current results as CSV">Download CSV</button>
     </div>
   </div>
   <div id="loaderBar" class="loader-bar hidden">
@@ -324,6 +335,7 @@
     const PAGE_SIZE = 25;
     let cachedAllIssues = null;  // for aging sort: full sorted result
     let currentSortBy = null;    // 'created_desc'|'created_asc'|'aging_desc'|'aging_asc'|null
+    let exportableIssues = [];   // issues available for CSV download
 
     async function fetchDefects(page, fromPagination) {
       page = Math.max(1, parseInt(page, 10) || 1);
@@ -421,10 +433,14 @@
 
         if (issues.length === 0) {
           document.getElementById('results').innerHTML = '<p class="error">No defects found.</p>';
+          exportableIssues = [];
+          document.getElementById('downloadBtn').disabled = true;
         } else {
+          exportableIssues = cachedAllIssues || issues;
+          document.getElementById('downloadBtn').disabled = false;
           const sortCreated = currentSortBy === 'created_asc' ? 'asc' : (currentSortBy === 'created_desc' ? 'desc' : '');
           const sortAging = currentSortBy === 'aging_asc' ? 'asc' : (currentSortBy === 'aging_desc' ? 'desc' : '');
-          const thead = `<tr><th>KEY</th><th>STATUS</th><th class="sortable" data-sort="created" data-dir="${sortCreated}">CREATED ${sortCreated ? (sortCreated === 'asc' ? '↑' : '↓') : ''}</th><th class="sortable" data-sort="aging" data-dir="${sortAging}">AGING (days) ${sortAging ? (sortAging === 'asc' ? '↑' : '↓') : ''}</th><th>SUMMARY</th></tr>`;
+          const thead = `<tr><th><input type="checkbox" id="selectAllDefects" title="Select all on this page"></th><th>KEY</th><th>STATUS</th><th class="sortable" data-sort="created" data-dir="${sortCreated}">CREATED ${sortCreated ? (sortCreated === 'asc' ? '↑' : '↓') : ''}</th><th class="sortable" data-sort="aging" data-dir="${sortAging}">AGING (days) ${sortAging ? (sortAging === 'asc' ? '↑' : '↓') : ''}</th><th>ASSIGNEE</th><th>SUMMARY</th><th>LABEL</th></tr>`;
           const rows = issues.map(i => {
             const key = i.key || '';
             const fields = i.fields || {};
@@ -432,11 +448,53 @@
             const extra = i.extra || {};
             const created = extra.created || (fields.created || '').substring(0, 10);
             const aging = extra.agingDays != null ? extra.agingDays : '-';
+            const assigneeName = (extra.assignee || (fields.assignee && (fields.assignee.displayName || fields.assignee.name || fields.assignee.emailAddress)) || '').replace(/</g, '&lt;');
             const summary = (fields.summary || '').replace(/</g, '&lt;');
+            const summaryRaw = (fields.summary || '').replace(/"/g, '&quot;');
             const jiraUrl = `https://onejira.verizon.com/browse/${key}`;
-            return `<tr><td><a href="${jiraUrl}" target="_blank">${key}</a></td><td>${status}</td><td>${created}</td><td>${aging}</td><td>${summary}</td></tr>`;
+            return `<tr data-key="${key}" data-summary="${summaryRaw}"><td><input type="checkbox" class="defect-select" value="${key}"></td><td><a href="${jiraUrl}" target="_blank">${key}</a></td><td>${status}</td><td>${created}</td><td>${aging}</td><td>${assigneeName}</td><td>${summary}</td><td><button type="button" class="btn-label" data-key="${key}" data-summary="${summaryRaw}">...</button><span class="label-result"></span></td></tr>`;
           }).join('');
-          document.getElementById('results').innerHTML = `<table><thead>${thead}</thead><tbody>${rows}</tbody></table>`;
+          document.getElementById('results').innerHTML = `<div id="bulkLabelBar" class="pagination-bar" style="margin-bottom:8px"><button type="button" class="btn-label btn-label-bulk" id="addLabelToSelected">Add label to selected (<span id="selectedCount">0</span>)</button></div><table><thead>${thead}</thead><tbody>${rows}</tbody></table>`;
+          const bulkBar = document.getElementById('bulkLabelBar');
+          bulkBar.style.display = 'flex';
+          document.getElementById('selectAllDefects').addEventListener('change', (e) => {
+            document.querySelectorAll('.defect-select').forEach(cb => cb.checked = e.target.checked);
+            updateSelectedCount();
+          });
+          document.querySelectorAll('.defect-select').forEach(cb => cb.addEventListener('change', updateSelectedCount));
+          function updateSelectedCount() {
+            const n = document.querySelectorAll('.defect-select:checked').length;
+            document.getElementById('selectedCount').textContent = n;
+          }
+          document.getElementById('addLabelToSelected').addEventListener('click', addLabelToSelected);
+
+          issues.forEach((issue) => {
+            const key = issue.key;
+            const existingLabels = ((issue.fields || {}).labels || []);
+            fetch(`${SERVER}/jira/suggest-label`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key })
+            })
+              .then(r => r.json())
+              .then((data) => {
+                const btn = document.querySelector(`button.btn-label[data-key="${key}"]`);
+                if (!btn || btn.classList.contains('btn-label-bulk')) return;
+                const suggested = data.suggestedLabel;
+                if (suggested && existingLabels.indexOf(suggested) >= 0) {
+                  btn.textContent = 'Updated ' + suggested;
+                  btn.disabled = true;
+                } else if (suggested) {
+                  btn.textContent = 'Add ' + suggested;
+                } else {
+                  btn.textContent = 'Add label (none)';
+                }
+              })
+              .catch(() => {
+                const btn = document.querySelector(`button.btn-label[data-key="${key}"]`);
+                if (btn && !btn.classList.contains('btn-label-bulk')) btn.textContent = 'Add label';
+              });
+          });
 
           const totalPages = Math.ceil(total / PAGE_SIZE);
           if (totalPages > 1) {
@@ -483,18 +541,118 @@
     document.getElementById('projectSel').addEventListener('change', loadComponentsAssigneesLabels);
     document.getElementById('fetchBtn').addEventListener('click', () => { cachedAllIssues = null; fetchDefects(1); });
 
-    document.getElementById('results').addEventListener('click', (e) => {
-      const th = e.target.closest('th.sortable');
-      if (!th) return;
-      const col = th.getAttribute('data-sort');
-      const dir = th.getAttribute('data-dir');
-      if (col === 'created') {
-        currentSortBy = (dir === 'asc' ? 'created_desc' : 'created_asc');
-      } else if (col === 'aging') {
-        currentSortBy = (dir === 'asc' ? 'aging_desc' : 'aging_asc');
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      if (exportableIssues.length === 0) return;
+      const esc = (v) => {
+        const s = String(v == null ? '' : v);
+        return '"' + s.replace(/"/g, '""') + '"';
+      };
+      const headers = ['Key', 'Status', 'Created', 'Aging (days)', 'Assignee', 'Summary'];
+      const rows = exportableIssues.map(i => {
+        const f = i.fields || {};
+        const ex = i.extra || {};
+        const assignee = ex.assignee || (f.assignee && (f.assignee.displayName || f.assignee.name || f.assignee.emailAddress)) || '';
+        return [i.key, (f.status || {}).name || '', ex.created || (f.created || '').substring(0, 10), ex.agingDays != null ? ex.agingDays : '-', assignee, f.summary || ''];
+      });
+      const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'defects_' + new Date().toISOString().slice(0, 10) + '.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    async function addLabelToSelected() {
+      const checked = document.querySelectorAll('.defect-select:checked');
+      const keys = Array.from(checked).map(cb => cb.value).filter(Boolean);
+      if (keys.length === 0) return;
+      const bulkBtn = document.getElementById('addLabelToSelected');
+      if (!bulkBtn) return;
+      bulkBtn.disabled = true;
+      const countEl = document.getElementById('selectedCount');
+      let done = 0;
+      const total = keys.length;
+      for (const key of keys) {
+        bulkBtn.querySelector('span').textContent = `Processing ${done + 1}/${total}...`;
+        try {
+          const res = await fetch(`${SERVER}/jira/apply-defect-label`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+          });
+          const data = await res.json();
+            if (data.labelApplied) {
+            const row = document.querySelector(`tr[data-key="${key}"]`);
+            if (row) {
+              const resultSpan = row.querySelector('.label-result');
+              if (resultSpan) {
+                resultSpan.textContent = ' ' + data.labelApplied;
+                resultSpan.style.color = '#0a0';
+              }
+              const addBtn = row.querySelector('button.btn-label');
+              if (addBtn) {
+                addBtn.textContent = 'Updated ' + data.labelApplied;
+                addBtn.disabled = true;
+              }
+            }
+          }
+        } catch (err) { /* continue with next */ }
+        done++;
       }
-      cachedAllIssues = null;
-      fetchDefects(1);
+      bulkBtn.querySelector('span').textContent = '0';
+      document.querySelectorAll('.defect-select:checked').forEach(cb => cb.checked = false);
+      const selCountEl = document.getElementById('selectedCount');
+      if (selCountEl) selCountEl.textContent = '0';
+      bulkBtn.disabled = false;
+    }
+
+    document.getElementById('results').addEventListener('click', async (e) => {
+      const th = e.target.closest('th.sortable');
+      if (th) {
+        const col = th.getAttribute('data-sort');
+        const dir = th.getAttribute('data-dir');
+        if (col === 'created') {
+          currentSortBy = (dir === 'asc' ? 'created_desc' : 'created_asc');
+        } else if (col === 'aging') {
+          currentSortBy = (dir === 'asc' ? 'aging_desc' : 'aging_asc');
+        }
+        cachedAllIssues = null;
+        fetchDefects(1);
+        return;
+      }
+      const btn = e.target.closest('button.btn-label');
+      if (btn) {
+        const key = btn.getAttribute('data-key');
+        if (!key) return;
+        btn.disabled = true;
+        btn.textContent = '...';
+        const resultSpan = btn.parentElement.querySelector('.label-result');
+        try {
+          const res = await fetch(`${SERVER}/jira/apply-defect-label`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || res.statusText);
+          if (data.labelApplied) {
+            resultSpan.textContent = ' ' + data.labelApplied;
+            resultSpan.style.color = '#0a0';
+            btn.textContent = 'Updated ' + data.labelApplied;
+            btn.disabled = true;
+          } else {
+            resultSpan.textContent = ' (none)';
+            resultSpan.style.color = '#666';
+            btn.textContent = 'Add label (none)';
+          }
+        } catch (err) {
+          resultSpan.textContent = ' Error';
+          resultSpan.style.color = '#c00';
+          btn.textContent = 'Retry';
+          btn.disabled = false;
+        }
+      }
     });
 
     loadComponentsAssigneesLabels();
