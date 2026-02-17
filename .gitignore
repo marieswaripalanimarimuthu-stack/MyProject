@@ -39,6 +39,9 @@ build/
 env_value.txt
 Myenv file.txt
 
+# Debug and temp files
+debug_log_*.txt
+
 # Editor swap files
 *.swp
 *.swo

@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Defect Browser by Component / Assignee / Labels</title>
+  <style>
+    body { font-family: Segoe UI, Tahoma, Arial, sans-serif; margin: 24px; background: #f7f7f9; }
+    h1 { font-size: 20px; margin-bottom: 16px; color: #1a3b7a; }
+    .filters { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 16px; }
+    .filter-group { display: flex; flex-direction: column; gap: 4px; }
+    .filter-group label { font-size: 13px; color: #555; }
+    select { min-width: 200px; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    button { padding: 8px 16px; background: #0078d4; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    button:hover { background: #106ebe; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #bcd0ff; border-top-color: #1a3b7a; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 10px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: #f0f4ff; border: 1px solid #bcd0ff; border-radius: 8px; margin-bottom: 12px; font-size: 14px; color: #1a3b7a; }
+    .loader-bar.hidden { display: none; }
+    #summary { font-size: 13px; color: #666; margin-bottom: 8px; }
+    .pagination-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 12px 0; font-size: 13px; color: #555; }
+    .pagination-bar .record-info { font-weight: 500; color: #1a3b7a; }
+    .pagination-controls { display: flex; align-items: center; gap: 6px; }
+    .pagination-controls button { padding: 6px 12px; font-size: 13px; min-width: 36px; }
+    .pagination-controls button.active { background: #1a3b7a; font-weight: 600; }
+    .pagination-controls button:disabled { cursor: not-allowed; }
+    th.sortable { cursor: pointer; user-select: none; }
+    th.sortable:hover { text-decoration: underline; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 13px; }
+    th { background: #1a3b7a; color: #fff; font-weight: 600; }
+    tr:hover { background: #f5f7fa; }
+    .error { color: #c00; font-size: 13px; margin-top: 8px; }
+    a { color: #0078d4; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    /* Multi-select dropdown */
+    .multi-select { position: relative; min-width: 200px; }
+    .multi-select-trigger { padding: 8px 28px 8px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fff; cursor: pointer; font-size: 14px; text-align: left; min-height: 38px; }
+    .multi-select-trigger:hover { border-color: #888; }
+    .multi-select-trigger::after { content: ''; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); border: 5px solid transparent; border-top-color: #666; }
+    .multi-select-trigger.disabled { background: #eee; cursor: not-allowed; }
+    .multi-select-panel { display: none; position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 220px; max-height: 280px; overflow-y: auto; background: #fff; border: 1px solid #ccc; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; }
+    .multi-select-panel.open { display: block; }
+    .multi-select-search { padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .multi-select-search input { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; box-sizing: border-box; }
+    .multi-select-search input:focus { outline: none; border-color: #0078d4; }
+    .multi-select-search input::placeholder { color: #999; }
+    .multi-select-actions { padding: 6px 10px; border-bottom: 1px solid #eee; font-size: 12px; }
+    .multi-select-actions a { margin-right: 12px; cursor: pointer; }
+    .multi-select-options { padding: 8px; }
+    .multi-select-option { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; cursor: pointer; }
+    .multi-select-option:hover { background: #f0f4ff; }
+    .multi-select-option input { margin: 0; cursor: pointer; }
+    .jql-banner { padding: 10px 14px; margin-bottom: 16px; background: #f0f4ff; border: 1px solid #bcd0ff; border-radius: 6px; font-size: 12px; font-family: Consolas, monospace; color: #1a3b7a; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Defect Browser by Component / Assignee / Labels <a href="index.html" style="font-size:14px;font-weight:normal;margin-left:12px;">← Back to Jira Agent</a></h1>
+  <p style="font-size: 13px; color: #666; margin-bottom: 8px;">Select multiple components, assignees, and labels. Click the dropdown to expand and use checkboxes.</p>
+  <div id="jqlBanner" class="jql-banner" style="display:none;"></div>
+
+  <div class="filters">
+    <div class="filter-group">
+      <label>Project</label>
+      <select id="projectSel">
+        <option value="CXPOPER">CXPOPER</option>
+        <option value="PRODDEF">PRODDEF</option>
+        <option value="CXTDT">CXT - Defect Tracker</option>
+        <option value="NSADT">NorthStar Architecture Defect Tracker</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Component(s)</label>
+      <div id="componentMulti" class="multi-select"></div>
+    </div>
+    <div class="filter-group">
+      <label>Assignee(s)</label>
+      <div id="assigneeMulti" class="multi-select"></div>
+    </div>
+    <div class="filter-group">
+      <label>Label(s)</label>
+      <div id="labelMulti" class="multi-select"></div>
+    </div>
+    <div class="filter-group">
+      <label>Status(es)</label>
+      <div id="statusMulti" class="multi-select"></div>
+    </div>
+    <div class="filter-group">
+      <label>Priority(ies)</label>
+      <div id="priorityMulti" class="multi-select"></div>
+    </div>
+    <div class="filter-group">
+      <label>&nbsp;</label>
+      <button id="fetchBtn">Fetch Defects</button>
+    </div>
+  </div>
+  <div id="loaderBar" class="loader-bar hidden">
+    <span class="spinner"></span>
+    <span id="loaderText">Processing...</span>
+  </div>
+  <div id="summary"></div>
+  <div id="paginationBar" class="pagination-bar" style="display:none;"></div>
+  <div id="results"></div>
+
+  <script>
+    const SERVER = 'http://127.0.0.1:8765';
+
+    function qs(params) {
+      const usp = new URLSearchParams();
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') usp.append(k, String(v));
+      });
+      return usp.toString();
+    }
+
+    function createMultiSelect(containerId, label, options, onChange, opts) {
+      opts = opts || {};
+      const valueKey = opts.valueKey;
+      const labelKey = opts.labelKey;
+      const emptyLabel = opts.emptyLabel;  // e.g. "--Select--" when nothing selected
+      const isObjectItems = valueKey && labelKey;
+
+      function itemValue(item) {
+        if (isObjectItems && item && typeof item === 'object') return String(item[valueKey] || item);
+        return String(item);
+      }
+      function itemLabel(item) {
+        if (isObjectItems && item && typeof item === 'object') return String(item[labelKey] || item[valueKey] || item);
+        return String(item);
+      }
+
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      const trigger = document.createElement('div');
+      trigger.className = 'multi-select-trigger';
+      trigger.textContent = label;
+      const panel = document.createElement('div');
+      panel.className = 'multi-select-panel';
+
+      const searchDiv = document.createElement('div');
+      searchDiv.className = 'multi-select-search';
+      const searchInput = document.createElement('input');
+      searchInput.type = 'text';
+      searchInput.placeholder = 'Search...';
+      searchInput.setAttribute('aria-label', 'Filter options');
+      searchDiv.appendChild(searchInput);
+
+      const actions = document.createElement('div');
+      actions.className = 'multi-select-actions';
+      actions.innerHTML = '<a class="selectAll">Select all</a><a class="clearAll">Clear</a>';
+      const optsDiv = document.createElement('div');
+      optsDiv.className = 'multi-select-options';
+
+      let selected = new Set();
+      let searchFilter = '';
+
+      function updateTrigger() {
+        const n = selected.size;
+        trigger.textContent = n ? `${label} (${n} selected)` : (emptyLabel || label);
+      }
+
+      function renderOptions() {
+        optsDiv.innerHTML = '';
+        const filter = (searchFilter || '').toLowerCase().trim();
+        const optsToShow = (options || []).filter(item => !filter || itemLabel(item).toLowerCase().includes(filter));
+        if (optsToShow.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'multi-select-option';
+          empty.style.color = '#999';
+          empty.textContent = filter ? 'No matches' : '(none)';
+          optsDiv.appendChild(empty);
+          return;
+        }
+        optsToShow.forEach(item => {
+          const lab = document.createElement('label');
+          lab.className = 'multi-select-option';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = itemValue(item);
+          cb.checked = selected.has(item);
+          lab.dataset.itemValue = itemValue(item);
+          cb.addEventListener('change', () => {
+            if (cb.checked) selected.add(item); else selected.delete(item);
+            updateTrigger();
+            onChange();
+          });
+          lab.appendChild(cb);
+          lab.appendChild(document.createTextNode(itemLabel(item)));
+          lab.addEventListener('click', (e) => { if (e.target !== cb) { cb.checked = !cb.checked; if (cb.checked) selected.add(item); else selected.delete(item); updateTrigger(); onChange(); } });
+          optsDiv.appendChild(lab);
+        });
+      }
+
+      searchInput.addEventListener('input', () => {
+        searchFilter = searchInput.value;
+        renderOptions();
+      });
+      searchInput.addEventListener('keydown', (e) => e.stopPropagation());
+
+      actions.querySelector('.selectAll').addEventListener('click', (e) => {
+        e.preventDefault();
+        const filter = (searchFilter || '').toLowerCase().trim();
+        const toSelect = filter ? (options || []).filter(item => itemLabel(item).toLowerCase().includes(filter)) : (options || []);
+        toSelect.forEach(item => selected.add(item));
+        renderOptions();
+        updateTrigger();
+        onChange();
+      });
+      actions.querySelector('.clearAll').addEventListener('click', (e) => {
+        e.preventDefault();
+        selected.clear();
+        renderOptions();
+        updateTrigger();
+        onChange();
+      });
+
+      trigger.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (trigger.classList.contains('disabled')) return;
+        const opening = !panel.classList.contains('open');
+        panel.classList.toggle('open');
+        document.querySelectorAll('.multi-select-panel.open').forEach(p => { if (p !== panel) p.classList.remove('open'); });
+        if (opening) { searchInput.value = ''; searchFilter = ''; renderOptions(); searchInput.focus(); }
+      });
+
+      panel.appendChild(searchDiv);
+      panel.appendChild(actions);
+      panel.appendChild(optsDiv);
+      container.appendChild(trigger);
+      container.appendChild(panel);
+
+      document.addEventListener('click', (e) => {
+        if (!container.contains(e.target)) panel.classList.remove('open');
+      });
+
+      return {
+        setOptions(items) {
+          options = items || [];
+          selected.clear();
+          searchFilter = '';
+          searchInput.value = '';
+          renderOptions();
+          updateTrigger();
+        },
+        getSelected() {
+          const arr = Array.from(selected);
+          return isObjectItems ? arr.map(item => itemValue(item)) : arr;
+        },
+        setDisabled(disabled) { trigger.classList.toggle('disabled', !!disabled); },
+        open: () => panel.classList.add('open'),
+        close: () => panel.classList.remove('open')
+      };
+    }
+
+    let componentMulti, assigneeMulti, labelMulti, statusMulti, priorityMulti;
+
+    async function loadComponentsAssigneesLabels() {
+      const project = document.getElementById('projectSel').value;
+      componentMulti.setDisabled(true);
+      assigneeMulti.setDisabled(true);
+      labelMulti.setDisabled(true);
+      statusMulti.setDisabled(true);
+      priorityMulti.setDisabled(true);
+      showLoader(true, 'Loading components, assignees, labels, statuses, priorities...');
+      document.getElementById('summary').textContent = '';
+
+      try {
+        const res = await fetch(`${SERVER}/jira/components-assignees?${qs({ project, createdAfter: '-6m' })}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+
+        componentMulti.setOptions(data.components || []);
+        const assigneesRaw = data.assignees || [];
+        const assigneesNorm = assigneesRaw.map(a => typeof a === 'object' && a ? a : { name: String(a), displayName: String(a) });
+        assigneeMulti.setOptions(assigneesNorm);
+        labelMulti.setOptions(data.labels || []);
+        statusMulti.setOptions(data.statuses || []);
+        priorityMulti.setOptions(data.priorities || []);
+
+        const nc = (data.components || []).length;
+        const na = assigneesNorm.length;
+        const nl = (data.labels || []).length;
+        const ns = (data.statuses || []).length;
+        const np = (data.priorities || []).length;
+        showLoader(false);
+        document.getElementById('summary').textContent = `Loaded ${nc} components, ${na} assignees, ${nl} labels, ${ns} statuses, ${np} priorities. Select one or more and click Fetch Defects.`;
+      } catch (e) {
+        console.error('Failed to load components/assignees/labels:', e);
+        showLoader(false);
+        document.getElementById('summary').textContent = 'Error loading dropdowns: ' + e.message;
+        componentMulti.setOptions([]);
+        assigneeMulti.setOptions([]);
+        labelMulti.setOptions([]);
+        statusMulti.setOptions([]);
+        priorityMulti.setOptions([]);
+      } finally {
+        componentMulti.setDisabled(false);
+        assigneeMulti.setDisabled(false);
+        labelMulti.setDisabled(false);
+        statusMulti.setDisabled(false);
+        priorityMulti.setDisabled(false);
+        showLoader(false);
+      }
+    }
+
+    function showLoader(show, text) {
+      const bar = document.getElementById('loaderBar');
+      const txt = document.getElementById('loaderText');
+      if (show) {
+        bar.classList.remove('hidden');
+        txt.textContent = text || 'Processing...';
+      } else {
+        bar.classList.add('hidden');
+      }
+    }
+
+    function encodeMultiParam(arr) {
+      if (!arr || arr.length === 0) return '';
+      if (arr.length === 1) return arr[0];
+      return '__multijson__:' + JSON.stringify(arr);
+    }
+
+    const PAGE_SIZE = 25;
+    let cachedAllIssues = null;  // for aging sort: full sorted result
+    let currentSortBy = null;    // 'created_desc'|'created_asc'|'aging_desc'|'aging_asc'|null
+
+    async function fetchDefects(page, fromPagination) {
+      page = Math.max(1, parseInt(page, 10) || 1);
+      const project = document.getElementById('projectSel').value;
+      const components = componentMulti.getSelected();
+      const assignees = assigneeMulti.getSelected();
+      const labels = labelMulti.getSelected();
+      const statuses = statusMulti.getSelected();
+      const priorities = priorityMulti.getSelected();
+
+      const startAt = (page - 1) * PAGE_SIZE;
+      const params = { project, maxResults: PAGE_SIZE, startAt, createdAfter: '-6m' };
+      if (currentSortBy === 'created_asc' || currentSortBy === 'created_desc') params.orderBy = currentSortBy;
+      const compParam = encodeMultiParam(components);
+      const assignParam = encodeMultiParam(assignees);
+      const labelParam = encodeMultiParam(labels);
+      const statusParam = encodeMultiParam(statuses);
+      const priorityParam = encodeMultiParam(priorities);
+      if (compParam) params.component = compParam;
+      if (assignParam) params.assignedTo = assignParam;
+      if (labelParam) params.label = labelParam;
+      if (statusParam) params.status = statusParam;
+      if (priorityParam) params.priority = priorityParam;
+
+      showLoader(true, fromPagination ? 'Loading page...' : 'Fetching defects...');
+      document.getElementById('summary').textContent = '';
+      document.getElementById('results').innerHTML = '';
+      document.getElementById('paginationBar').style.display = 'none';
+      const jqlBanner = document.getElementById('jqlBanner');
+      jqlBanner.style.display = 'none';
+
+      try {
+        let issues, total, jqlStr;
+        if (!fromPagination) cachedAllIssues = null;
+        if ((currentSortBy === 'aging_asc' || currentSortBy === 'aging_desc') && cachedAllIssues && fromPagination) {
+          total = cachedAllIssues.length;
+          const start = (page - 1) * PAGE_SIZE;
+          issues = cachedAllIssues.slice(start, start + PAGE_SIZE);
+          jqlStr = document.getElementById('jqlBanner').dataset.lastJql || '';
+        } else {
+          if (currentSortBy === 'aging_asc' || currentSortBy === 'aging_desc') {
+            params.maxResults = 500;
+            params.startAt = 0;
+          }
+          const res = await fetch(`${SERVER}/jira/issues`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(params)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || res.statusText);
+
+          issues = data.issues || [];
+          total = parseInt(data.total, 10) || 0;
+          if (total === 0 && issues.length > 0) total = parseInt(data.startAt, 10) + issues.length;
+          jqlStr = data.jql || '';
+
+          if (currentSortBy === 'aging_asc' || currentSortBy === 'aging_desc') {
+            const asc = currentSortBy === 'aging_asc';
+            const realTotal = parseInt(data.total, 10) || issues.length;
+            cachedAllIssues = [...issues];
+            let fetchStart = issues.length;
+            while (fetchStart < realTotal && issues.length === 500) {
+              const nextRes = await fetch(`${SERVER}/jira/issues`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...params, startAt: fetchStart, maxResults: 500 })
+              });
+              const nextData = await nextRes.json();
+              const nextIssues = nextData.issues || [];
+              cachedAllIssues.push(...nextIssues);
+              fetchStart += nextIssues.length;
+              if (nextIssues.length < 500) break;
+            }
+            cachedAllIssues.sort((a, b) => {
+              const aa = a.extra && a.extra.agingDays != null ? a.extra.agingDays : 999999;
+              const bb = b.extra && b.extra.agingDays != null ? b.extra.agingDays : 999999;
+              return asc ? (aa - bb) : (bb - aa);
+            });
+            total = cachedAllIssues.length;
+            const start = (page - 1) * PAGE_SIZE;
+            issues = cachedAllIssues.slice(start, start + PAGE_SIZE);
+          }
+        }
+
+        if (jqlStr) {
+          jqlBanner.textContent = 'JQL: ' + jqlStr;
+          jqlBanner.dataset.lastJql = jqlStr;
+          jqlBanner.style.display = 'block';
+        }
+
+        const fromVal = total === 0 ? 0 : startAt + 1;
+        const toVal = Math.min(startAt + issues.length, total);
+        document.getElementById('summary').textContent = `Showing ${fromVal}-${toVal} of ${total} defect(s)`;
+
+        if (issues.length === 0) {
+          document.getElementById('results').innerHTML = '<p class="error">No defects found.</p>';
+        } else {
+          const sortCreated = currentSortBy === 'created_asc' ? 'asc' : (currentSortBy === 'created_desc' ? 'desc' : '');
+          const sortAging = currentSortBy === 'aging_asc' ? 'asc' : (currentSortBy === 'aging_desc' ? 'desc' : '');
+          const thead = `<tr><th>KEY</th><th>STATUS</th><th class="sortable" data-sort="created" data-dir="${sortCreated}">CREATED ${sortCreated ? (sortCreated === 'asc' ? '↑' : '↓') : ''}</th><th class="sortable" data-sort="aging" data-dir="${sortAging}">AGING (days) ${sortAging ? (sortAging === 'asc' ? '↑' : '↓') : ''}</th><th>SUMMARY</th></tr>`;
+          const rows = issues.map(i => {
+            const key = i.key || '';
+            const fields = i.fields || {};
+            const status = (fields.status || {}).name || '';
+            const extra = i.extra || {};
+            const created = extra.created || (fields.created || '').substring(0, 10);
+            const aging = extra.agingDays != null ? extra.agingDays : '-';
+            const summary = (fields.summary || '').replace(/</g, '&lt;');
+            const jiraUrl = `https://onejira.verizon.com/browse/${key}`;
+            return `<tr><td><a href="${jiraUrl}" target="_blank">${key}</a></td><td>${status}</td><td>${created}</td><td>${aging}</td><td>${summary}</td></tr>`;
+          }).join('');
+          document.getElementById('results').innerHTML = `<table><thead>${thead}</thead><tbody>${rows}</tbody></table>`;
+
+          const totalPages = Math.ceil(total / PAGE_SIZE);
+          if (totalPages > 1) {
+            const pagBar = document.getElementById('paginationBar');
+            pagBar.style.display = 'flex';
+            let html = '<span class="record-info">Showing ' + fromVal + '-' + toVal + ' of ' + total + ' records</span>';
+            html += '<div class="pagination-controls">';
+            html += '<button type="button" data-page="prev" ' + (page <= 1 ? 'disabled' : '') + '>Previous</button>';
+            const maxPages = 10;
+            let startPage = Math.max(1, page - Math.floor(maxPages / 2));
+            let endPage = Math.min(totalPages, startPage + maxPages - 1);
+            if (endPage - startPage < maxPages - 1) startPage = Math.max(1, endPage - maxPages + 1);
+            for (let p = startPage; p <= endPage; p++) {
+              html += '<button type="button" class="' + (p === page ? 'active' : '') + '" data-page="' + p + '">' + p + '</button>';
+            }
+            html += '<button type="button" data-page="next" ' + (page >= totalPages ? 'disabled' : '') + '>Next</button>';
+            html += '</div>';
+            pagBar.innerHTML = html;
+            pagBar.onclick = (e) => {
+              const btn = e.target.closest('button[data-page]');
+              if (!btn || btn.disabled) return;
+              const val = btn.getAttribute('data-page');
+              if (val === 'prev' && page > 1) fetchDefects(page - 1, true);
+              else if (val === 'next' && page < totalPages) fetchDefects(page + 1, true);
+              else if (val !== 'prev' && val !== 'next') fetchDefects(parseInt(val, 10), true);
+            };
+          }
+        }
+      } catch (e) {
+        document.getElementById('summary').textContent = '';
+        document.getElementById('results').innerHTML = '<p class="error">Error: ' + e.message + '</p>';
+      } finally {
+        showLoader(false);
+      }
+    }
+
+    function onFilterChange() { /* Optional: could auto-fetch; for now user clicks Fetch Defects */ }
+    componentMulti = createMultiSelect('componentMulti', 'Component(s)', [], onFilterChange);
+    assigneeMulti = createMultiSelect('assigneeMulti', 'Assignee(s)', [], onFilterChange, { valueKey: 'name', labelKey: 'displayName' });
+    labelMulti = createMultiSelect('labelMulti', 'Label(s)', [], onFilterChange);
+    statusMulti = createMultiSelect('statusMulti', 'Status(es)', [], onFilterChange, { emptyLabel: '--Select--' });
+    priorityMulti = createMultiSelect('priorityMulti', 'Priority(ies)', [], onFilterChange, { emptyLabel: '--Select--' });
+
+    document.getElementById('projectSel').addEventListener('change', loadComponentsAssigneesLabels);
+    document.getElementById('fetchBtn').addEventListener('click', () => { cachedAllIssues = null; fetchDefects(1); });
+
+    document.getElementById('results').addEventListener('click', (e) => {
+      const th = e.target.closest('th.sortable');
+      if (!th) return;
+      const col = th.getAttribute('data-sort');
+      const dir = th.getAttribute('data-dir');
+      if (col === 'created') {
+        currentSortBy = (dir === 'asc' ? 'created_desc' : 'created_asc');
+      } else if (col === 'aging') {
+        currentSortBy = (dir === 'asc' ? 'aging_desc' : 'aging_asc');
+      }
+      cachedAllIssues = null;
+      fetchDefects(1);
+    });
+
+    loadComponentsAssigneesLabels();
+  </script>
+</body>
+</html>

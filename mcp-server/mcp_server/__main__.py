@@ -1,9 +1,20 @@
 import json
 import os
+from socketserver import ThreadingMixIn
+
+# Load .env from mcp-server directory (optional; secrets stay out of git)
+try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    load_dotenv(_env_path)
+except ImportError:
+    pass
 import time
+from datetime import datetime, timedelta, timezone
 import subprocess
 from urllib.parse import urlparse, parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from .query_builder import fetch_and_validate
 from base64 import b64encode
 import ssl
 import urllib.request
@@ -11,6 +22,8 @@ import urllib.parse
 import urllib.error
 from typing import Optional, List
 import socket
+import threading
+
 try:
     import pdfplumber  # for parsing tables from PDFs
 except Exception:
@@ -57,7 +70,21 @@ UI_INDEX_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "index.html")
 UI_QUEUE_SNAPSHOT_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "queue_snapshot.html")
 UI_ORDER_VALIDATION_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "order_validation.html")
 UI_HEALTHCHECK_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "healthcheck.html")
+UI_ORDER_DETAIL_WOS_PATH = os.path.join(WORKSPACE_ROOT, "mcp-client", "ui", "OrderDetail_WOS.html")
 
+# Create a wrapper class that supports threading
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handle requests in a separate thread."""
+    daemon_threads = True # Ensure threads exit when the main program does
+    
+def run_server():
+    server_address = ('127.0.0.1', 8765)
+    # Use ThreadedHTTPServer instead of HTTPServer
+    httpd = ThreadedHTTPServer(server_address, Handler)
+    print(f"[MCP Server] Multithreaded server running on http://127.0.0.1:8765")
+    httpd.serve_forever()
+    
+    
 def _fetch_binary(url: str) -> bytes:
     """Fetch binary content from a URL with browser-like headers and optional cookie."""
     req = urllib.request.Request(url)
@@ -643,18 +670,24 @@ def _score_system(text: str) -> dict:
     return scores
 
 
-def _build_jql(project: str, assigned_to: Optional[str], issue_type: Optional[str], status: Optional[str], priority: Optional[str]) -> str:
+def _build_jql(project: str, assigned_to: Optional[str], issue_type: Optional[str], status: Optional[str], priority: Optional[str], component: Optional[str] = None, label: Optional[str] = None, created_after: Optional[str] = None, order_by: Optional[str] = None) -> str:
     terms = []
     terms.append(f'project="{project}"')
+    if created_after:
+        # Jira relative: -6m (no quotes); absolute: "2024-01-01"
+        if created_after.startswith("-") and created_after.endswith("m"):
+            terms.append(f"created >= {created_after}")
+        else:
+            terms.append(f'created >= "{created_after}"')
     if assigned_to:
         at = str(assigned_to)
         if at.lower() in ("me", "currentuser"):
             terms.append("assignee = currentUser()")
         else:
-            # Support CJCM JSON-encoded list for names with commas
-            if at.startswith("__cjcmjson__:"):
+            # Support multiple assignees: __multijson__:["a","b"] or __cjcmjson__:["a","b"]
+            if at.startswith("__multijson__:") or at.startswith("__cjcmjson__:"):
                 try:
-                    raw = at.replace("__cjcmjson__:", "", 1)
+                    raw = at.replace("__multijson__:", "", 1).replace("__cjcmjson__:", "", 1)
                     items = json.loads(raw)
                     items = [str(s).strip() for s in items if str(s).strip()]
                 except Exception:
@@ -684,83 +717,264 @@ def _build_jql(project: str, assigned_to: Optional[str], issue_type: Optional[st
                 terms.append(f'assignee = "{at}"')
     if issue_type:
         terms.append(f'issuetype = "{issue_type}"')
-    if status:
-        sts = _quote_list(status)
+    def _to_list(val: str) -> List[str]:
+        if not val or not str(val).strip():
+            return []
+        s = str(val).strip()
+        if s.startswith("__multijson__:"):
+            try:
+                items = json.loads(s.replace("__multijson__:", "", 1))
+                return [str(x).strip() for x in items if str(x).strip()]
+            except Exception:
+                return [s]
+        return [x.strip() for x in s.split(",") if x.strip()]
+
+    sts = _to_list(status) if status else []
+    if sts:
         if len(sts) > 1:
             terms.append('status IN (' + ", ".join([f'"{s}"' for s in sts]) + ')')
         else:
             terms.append(f'status = "{sts[0]}"')
-    if priority:
-        prios = _quote_list(priority)
+    prios = _to_list(priority) if priority else []
+    if prios:
         if len(prios) > 1:
             terms.append('priority IN (' + ", ".join([f'"{p}"' for p in prios]) + ')')
         else:
             terms.append(f'priority = "{prios[0]}"')
-    jql = " AND ".join(terms) + " ORDER BY created DESC"
+    comp_items = _to_list(component) if component else []
+    if comp_items:
+        terms.append('component IN (' + ", ".join([f'"{c}"' for c in comp_items]) + ')')
+    lbl_items = _to_list(label) if label else []
+    if lbl_items:
+        terms.append('labels IN (' + ", ".join([f'"{l}"' for l in lbl_items]) + ')')
+    order_clause = " ORDER BY created ASC" if order_by == "created_asc" else " ORDER BY created DESC"
+    jql = " AND ".join(terms) + order_clause
     return jql
 
 
-def fetch_jira_issues(project_key: str, max_results: int = 25, start_at: int = 0, assigned_to: Optional[str] = None, issue_type: Optional[str] = None, status: Optional[str] = None, priority: Optional[str] = None):
+def _parse_created_and_aging(created_str: str) -> tuple:
+    """Parse Jira 'created' (ISO) and return (created_display, aging_days)."""
+    if not created_str:
+        return ("", None)
+    try:
+        # Jira format: 2025-12-10T10:00:00.000+0000
+        created_str = created_str.replace("+0000", "+00:00").replace("Z", "+00:00")
+        dt = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        delta = now - dt
+        aging_days = delta.days
+        created_display = dt.strftime("%Y-%m-%d")
+        return (created_display, aging_days)
+    except (ValueError, TypeError):
+        return (created_str[:10] if created_str else "", None)
+
+
+def fetch_jira_issues(project_key: str, max_results: int = 25, start_at: int = 0, assigned_to: Optional[str] = None, issue_type: Optional[str] = None, status: Optional[str] = None, priority: Optional[str] = None, component: Optional[str] = None, label: Optional[str] = None, created_after: Optional[str] = None, order_by: Optional[str] = None):
     if JIRA_MOCK or not (JIRA_BASE_URL and JIRA_EMAIL and JIRA_API_TOKEN):
         if JIRA_MOCK:
             print("[MCP Server] Using MOCK mode (JIRA_MOCK=1).")
         else:
             print("[MCP Server] Missing envs; using MOCK.")
             print(f"  JIRA_BASE_URL={'set' if JIRA_BASE_URL else 'missing'}; JIRA_EMAIL={'set' if JIRA_EMAIL else 'missing'}; JIRA_API_TOKEN={'set' if JIRA_API_TOKEN else 'missing'}")
+        # Mock issues with created date (30 and 5 days ago)
+        _base = datetime.now(timezone.utc)
+        _d30 = (_base - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        _d5 = (_base - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S.000+0000")
+        m1 = {"key": f"{project_key}-1", "fields": {"summary": "Mock issue one", "status": {"name": "To Do"}, "created": _d30}}
+        m2 = {"key": f"{project_key}-2", "fields": {"summary": "Mock issue two", "status": {"name": "In Progress"}, "created": _d5}}
+        for m in (m1, m2):
+            created_disp, aging = _parse_created_and_aging(m.get("fields", {}).get("created", ""))
+            m["extra"] = {"created": created_disp, "agingDays": aging}
         return {
-            "issues": [
-                {"key": f"{project_key}-1", "fields": {"summary": "Mock issue one", "status": {"name": "To Do"}}},
-                {"key": f"{project_key}-2", "fields": {"summary": "Mock issue two", "status": {"name": "In Progress"}}},
-            ],
+            "issues": [m1, m2],
             "maxResults": max_results,
             "isMock": True,
         }
 
-    jql = _build_jql(project_key, assigned_to, issue_type, status, priority)
-    print(f"JIRA query: {jql}")
     api_ver = "2" if JIRA_API_VERSION == "2" else "3"
-    # Include names expand to map customfield IDs to human-readable names
-    url = f"{JIRA_BASE_URL}/rest/api/{api_ver}/search?jql={urllib.parse.quote(jql)}&maxResults={max_results}&startAt={start_at}&expand=names"
-    print(f"JIRA URL: {url}")
-    # Prefer username for on-prem if provided; fall back to email
-    req = _build_jira_request(url)
-    # Use default SSL context
-    ctx = ssl.create_default_context()
-    try:
+    fields_list = ["summary", "status", "assignee", "components", "labels", "created", "fixVersions", "priority"]
+
+    def _do_search(cr_after: Optional[str]):
+        jql = _build_jql(project_key, assigned_to, issue_type, status, priority, component=component, label=label, created_after=cr_after, order_by=order_by)
+        print(f"JIRA query: {jql}")
+        # Use POST when JQL contains '&' to avoid URL encoding issues on both API v2 and v3
+        use_post = "&" in jql or api_ver == "3"
+        if use_post:
+            url = f"{JIRA_BASE_URL}/rest/api/{api_ver}/search"
+            body = json.dumps({
+                "jql": jql,
+                "startAt": start_at,
+                "maxResults": max_results,
+                "fields": fields_list,
+                "expand": ["names"],
+            }).encode("utf-8")
+            req = _build_jira_request(url, method="POST", data=body, content_type="application/json")
+            print(f"JIRA POST: {url}")
+        else:
+            fields_param = "&fields=" + ",".join(fields_list)
+            url = f"{JIRA_BASE_URL}/rest/api/2/search?jql={urllib.parse.quote(jql)}&maxResults={max_results}&startAt={start_at}&expand=names{fields_param}"
+            req = _build_jira_request(url)
+            print(f"JIRA URL: {url}")
+        ctx = ssl.create_default_context()
         with urllib.request.urlopen(req, context=ctx) as resp:
             data = resp.read().decode("utf-8")
-            payload = json.loads(data)
-            # Derive components and 'Work Owner VCG' from fields when possible
-            names = payload.get("names", {})
-            work_owner_key = None
-            for k, v in names.items():
-                if isinstance(v, str) and v.strip().lower() == "work owner vcg":
-                    work_owner_key = k
+            return json.loads(data)
+
+    # Try with date filter first; some Jira Server versions reject -6m or return 0 - retry without date
+    actual_cr_after = created_after
+    for cr_after in (created_after, None):
+        try:
+            payload = _do_search(cr_after)
+            total = payload.get("total", 0)
+            if total > 0 or not created_after or cr_after is None:
+                actual_cr_after = cr_after
+                break
+            if cr_after and total == 0:
+                print(f"[MCP Server] JQL with created>={created_after} returned 0; retrying without date filter")
+                continue
+        except Exception as e:
+            if created_after and cr_after == created_after:
+                print(f"[MCP Server] JQL with date filter failed: {e}; retrying without date")
+                continue
+            raise
+
+    # Attach the actual JQL used (may differ if we fell back to no date filter)
+    payload["jql"] = _build_jql(project_key, assigned_to, issue_type, status, priority, component=component, label=label, created_after=actual_cr_after, order_by=order_by)
+
+    names = payload.get("names", {})
+    work_owner_key = None
+    for k, v in names.items():
+        if isinstance(v, str) and v.strip().lower() == "work owner vcg":
+            work_owner_key = k
+            break
+    issues = payload.get("issues", [])
+    for issue in issues:
+        fields = issue.get("fields", {})
+        comps = fields.get("components") or []
+        comp_names = [c.get("name") for c in comps if isinstance(c, dict)]
+        fixvers = fields.get("fixVersions") or []
+        fixver_names = [fv.get("name") for fv in fixvers if isinstance(fv, dict)]
+        work_owner = None
+        if work_owner_key and work_owner_key in fields:
+            work_owner = fields.get(work_owner_key)
+        assignee = fields.get("assignee") or {}
+        assignee_name = assignee.get("displayName") or assignee.get("name") or assignee.get("emailAddress") or None
+        created_str = fields.get("created", "")
+        created_display, aging_days = _parse_created_and_aging(created_str)
+        issue["extra"] = {
+            "components": comp_names,
+            "fixVersions": fixver_names,
+            "workOwnerVCG": work_owner,
+            "assignee": assignee_name,
+            "created": created_display,
+            "agingDays": aging_days,
+        }
+    return payload
+
+
+def fetch_distinct_components_assignees_labels(project_key: str, created_after: str = "-6m") -> dict:
+    """Fetch distinct component names, assignee display names, labels, statuses, and priorities from issues in last 6 months."""
+    components: set = set()
+    assignees: set = set()
+    labels: set = set()
+    statuses: set = set()
+    priorities: set = set()
+    max_per_request = 500
+    start_at = 0
+
+    assignees_list: list = []  # list of {name, displayName} for JQL reliability
+
+    def _collect(payload: dict):
+        for issue in payload.get("issues", []):
+            fields = issue.get("fields", {})
+            comps = fields.get("components") or []
+            for c in comps:
+                if isinstance(c, dict) and c.get("name"):
+                    components.add(str(c["name"]).strip())
+            assignee = fields.get("assignee") or {}
+            # Jira Cloud: use accountId; Jira Server: use name/key
+            jql_id = assignee.get("accountId") or assignee.get("name") or assignee.get("key")
+            display = assignee.get("displayName") or jql_id or assignee.get("emailAddress")
+            if jql_id or display:
+                assignees_list.append({
+                    "name": str(jql_id or display).strip(),
+                    "displayName": str(display or jql_id).strip(),
+                })
+            for lbl in fields.get("labels") or []:
+                if lbl and str(lbl).strip():
+                    labels.add(str(lbl).strip())
+            st = fields.get("status")
+            if isinstance(st, dict) and st.get("name"):
+                statuses.add(str(st["name"]).strip())
+            prio = fields.get("priority")
+            if isinstance(prio, dict) and prio.get("name"):
+                priorities.add(str(prio["name"]).strip())
+
+    if JIRA_MOCK or not (JIRA_BASE_URL and (JIRA_USERNAME or JIRA_EMAIL) and JIRA_API_TOKEN):
+        return {
+            "components": ["5G - Nautilus", "ACSS", "Mock Component"],
+            "assignees": [{"name": "mockuser", "displayName": "Mock User"}, {"name": "testuser", "displayName": "Test User"}],
+            "labels": ["backend", "frontend", "priority-high"],
+            "statuses": ["To Do", "In Progress", "Done", "Open", "Closed"],
+            "priorities": ["Critical", "High", "Medium", "Low", "Lowest"],
+        }
+
+    # Try with date filter first; if no issues or error, retry without date (some Jira versions reject -6m)
+    for use_date in (True, False):
+        components.clear()
+        assignees_list.clear()
+        labels.clear()
+        statuses.clear()
+        priorities.clear()
+        start_at = 0
+        cr_after = created_after if use_date else None
+        try:
+            while True:
+                payload = fetch_jira_issues(project_key, max_results=max_per_request, start_at=start_at, created_after=cr_after)
+                _collect(payload)
+                total = payload.get("total", 0)
+                start_at += len(payload.get("issues", []))
+                if start_at >= total or start_at >= 2000:
                     break
-            issues = payload.get("issues", [])
-            for issue in issues:
-                fields = issue.get("fields", {})
-                comps = fields.get("components") or []
-                comp_names = [c.get("name") for c in comps if isinstance(c, dict)]
-                # Fix Versions (standard Jira field)
-                fixvers = fields.get("fixVersions") or []
-                fixver_names = [fv.get("name") for fv in fixvers if isinstance(fv, dict)]
-                work_owner = None
-                if work_owner_key and work_owner_key in fields:
-                    work_owner = fields.get(work_owner_key)
-                assignee = fields.get("assignee") or {}
-                assignee_name = assignee.get("displayName") or assignee.get("name") or assignee.get("emailAddress") or None
-                # Attach simplified extras for UI consumption
-                issue["extra"] = {
-                    "components": comp_names,
-                    "fixVersions": fixver_names,
-                    "workOwnerVCG": work_owner,
-                    "assignee": assignee_name,
-                }
-            return payload
-    except urllib.error.HTTPError as e:
-        err_text = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else str(e)
-        raise RuntimeError(f"Jira search failed: HTTP {e.code} {err_text[:300]}")
+            if components or assignees_list or labels or statuses or priorities:
+                break
+        except Exception as e:
+            if not use_date:
+                raise
+            print(f"[MCP Server] components-assignees with date filter failed: {e}; retrying without date")
+            continue
+
+    # Supplement with project-level components (in case few issues have components in date range)
+    try:
+        proj_comps = fetch_project_components(project_key)
+        for c in proj_comps if isinstance(proj_comps, list) else []:
+            if isinstance(c, dict) and c.get("name"):
+                components.add(str(c["name"]).strip())
+    except Exception as e:
+        print(f"[MCP Server] components-assignees: project components fetch skipped: {e}")
+
+    # Dedupe assignees by name (username), keep displayName for UI
+    seen = set()
+    assignees_out = []
+    for a in assignees_list:
+        n = a.get("name") or ""
+        if n and n not in seen:
+            seen.add(n)
+            assignees_out.append(a)
+
+    # Fallback common values when no issues in date range
+    statuses_out = sorted(statuses) if statuses else ["To Do", "In Progress", "Done", "Open", "In Review", "Closed", "Reopened", "Blocked"]
+    priorities_out = sorted(priorities) if priorities else ["Critical", "Highest", "High", "Medium", "Low", "Lowest", "Major", "Minor", "Trivial"]
+
+    return {
+        "components": sorted(components),
+        "assignees": sorted(assignees_out, key=lambda x: (x.get("displayName") or x.get("name") or "")),
+        "labels": sorted(labels),
+        "statuses": statuses_out,
+        "priorities": priorities_out,
+    }
 
 
 def fetch_latest_comment(issue_key: str):
@@ -1379,8 +1593,43 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/order-validation", "/ui/order_validation.html"):
             self._static_html(UI_ORDER_VALIDATION_PATH)
             return
+        if parsed.path in ("/", "/ordervalidation"):
+            file_path = os.path.join(WORKSPACE_ROOT, "OrderDetail_WOS.html")
+            with open(file_path, "rb") as f:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(f.read())
+        # Route to download the generated file
+        # In __main__.py
+
+        elif parsed.path == "/download/validation":
+        # Ensure this matches the BASE_DIR used in query_builder.py
+        # If query_builder.py is in the same folder as __main__.py:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(current_dir, "Validation.xlsx")
+
+            if os.path.exists(file_path):
+                print(f"[DEBUG] Serving file from: {file_path}") # Verify path in terminal
+                with open(file_path, "rb") as f:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    self.send_header("Content-Disposition", "attachment; filename=Validation.xlsx")
+                    self.end_headers()
+                    self.wfile.write(f.read())
+            else:
+                print(f"[ERROR] File not found at: {file_path}")
+                self._json(404, {"error": "File not found"})      
         if parsed.path in ("/healthcheck", "/ui/healthcheck.html"):
-            self._static_html(UI_HEALTHCHECK_PATH)
+            # Redirect healthcheck to Order Detail WOS page
+            try:
+                self.send_response(302)
+                self.send_header("Location", "/mcp-client/ui/OrderDetail_WOS.html")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+            except Exception:
+                # Fallback to serving the file directly if redirect fails
+                self._static_html(UI_ORDER_DETAIL_WOS_PATH)
             return
         if parsed.path in ("/queue-snapshot", "/ui/queue_snapshot.html"):
             self._static_html(UI_QUEUE_SNAPSHOT_PATH)
@@ -1867,6 +2116,21 @@ class Handler(BaseHTTPRequestHandler):
                 "JIRA_COOKIE_set": bool(JIRA_COOKIE),
             })
             return
+        if parsed.path == "/jira/components-assignees":
+            qs = parse_qs(parsed.query)
+            project = (qs.get("project") or ["CXPOPER"])[0]
+            created_after = (qs.get("createdAfter") or ["-6m"])[0]
+            if not project:
+                self._json(400, {"error": "Missing 'project' query parameter"})
+                return
+            try:
+                result = fetch_distinct_components_assignees_labels(project, created_after=created_after)
+                self._json(200, result)
+            except Exception as e:
+                print(f"[MCP Server] Error in /jira/components-assignees: {e}")
+                self._json(500, {"error": str(e)})
+            return
+
         if parsed.path == "/jira/issues":
             qs = parse_qs(parsed.query)
             project = (qs.get("project") or [""])[0]
@@ -1876,7 +2140,10 @@ class Handler(BaseHTTPRequestHandler):
             issue_type = (qs.get("type") or [None])[0]
             status = (qs.get("status") or [None])[0]
             priority = (qs.get("priority") or [None])[0]
-            print(f"[MCP Server] /jira/issues params: project={project!r}, assignedTo={assigned_to!r}, type={issue_type!r}, status={status!r}, priority={priority!r}, maxResults={max_results_str}, startAt={start_at_str}")
+            component = (qs.get("component") or [None])[0]
+            label = (qs.get("label") or [None])[0]
+            created_after = (qs.get("createdAfter") or [None])[0]
+            print(f"[MCP Server] /jira/issues params: project={project!r}, assignedTo={assigned_to!r}, component={component!r}, label={label!r}, type={issue_type!r}, status={status!r}, priority={priority!r}, maxResults={max_results_str}, startAt={start_at_str}")
             try:
                 max_results = int(max_results_str)
             except ValueError:
@@ -1890,7 +2157,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "Missing 'project' query parameter"})
                 return
             try:
-                issues = fetch_jira_issues(project, max_results, start_at=start_at, assigned_to=assigned_to, issue_type=issue_type, status=status, priority=priority)
+                issues = fetch_jira_issues(project, max_results, start_at=start_at, assigned_to=assigned_to, issue_type=issue_type, status=status, priority=priority, component=component, label=label, created_after=created_after)
+                # jql is set by fetch_jira_issues (reflects actual query used, including fallback without date)
                 self._json(200, issues)
             except Exception as e:
                 print(f"[MCP Server] Error in /jira/issues: {e}")
@@ -2040,6 +2308,98 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/jira/issues":
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length) if length > 0 else b"{}"
+            try:
+                body = json.loads(raw.decode("utf-8"))
+            except Exception as e:
+                self._json(400, {"error": f"Invalid JSON body: {e}"})
+                return
+            project = body.get("project") or ""
+            max_results = int(body.get("maxResults") or 25)
+            start_at = int(body.get("startAt") or 0)
+            assigned_to = body.get("assignedTo")
+            issue_type = body.get("type")
+            status = body.get("status")
+            priority = body.get("priority")
+            component = body.get("component")
+            label = body.get("label")
+            created_after = body.get("createdAfter")
+            order_by = body.get("orderBy")
+            if not project:
+                self._json(400, {"error": "Missing 'project' in body"})
+                return
+            try:
+                issues = fetch_jira_issues(project, max_results, start_at=start_at, assigned_to=assigned_to, issue_type=issue_type, status=status, priority=priority, component=component, label=label, created_after=created_after, order_by=order_by)
+                # jql is set by fetch_jira_issues (reflects actual query used, including fallback without date)
+                self._json(200, issues)
+            except Exception as e:
+                print(f"[MCP Server] Error in POST /jira/issues: {e}")
+                self._json(500, {"error": str(e)})
+            return
+
+        if parsed.path == "/validate/orderDetails":
+            try:
+                # 1. Prepare parameters instead of opening a connection here
+                
+                conn_params = {
+                    'user': ORACLE_USER,
+                    'password': ORACLE_PASSWORD,
+                    'dsn': ORACLE_DSN
+                }
+                print(f"[MCP Server] /validate/orderDetails with conn_params keys: {list(conn_params.keys())}")
+                
+                # 2. Parse payload from the HTML request
+                length = int(self.headers.get("Content-Length", 0))
+                print(f"[MCP Server] /validate/orderDetails Content-Length: {length}")
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                print(f"[MCP Server] /validate/orderDetails received data: {data}")    
+                # 3. Call the logic function with the dictionary
+                from .query_builder import fetchOrders
+                result_msg = fetchOrders(
+                conn_params, # This is now a dict, so conn_params['user'] will work
+                cart_id=data.get("cartId"))
+                print(f"[MCP Server] /validate/orderDetails result: {result_msg}")
+                self._json(200, {"ok": True, "message": result_msg})
+        
+            except Exception as e:
+                print(f"[SERVER ERROR] {str(e)}")
+                self._json(500, {"ok": False, "error": str(e)})
+            return
+        
+        if parsed.path == "/validate/order":
+            try:
+                # 1. Prepare parameters instead of opening a connection here
+                
+                conn_params = {
+                    'user': ORACLE_USER,
+                    'password': ORACLE_PASSWORD,
+                    'dsn': ORACLE_DSN
+                }
+                print(f"[MCP Server] /validate/order with conn_params keys: {list(conn_params.keys())}")
+                
+                # 2. Parse payload from the HTML request
+                length = int(self.headers.get("Content-Length", 0))
+                print(f"[MCP Server] /validate/order Content-Length: {length}")
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                print(f"[MCP Server] /validate/order received data: {data}")    
+                # 3. Call the logic function with the dictionary
+                from .query_builder import fetch_and_validate
+                result_msg = fetch_and_validate(
+                conn_params, # This is now a dict, so conn_params['user'] will work
+                cart_id=data.get("cartId"),
+                mtn=data.get("mtn"),
+                location_code=data.get("locCode"),
+                order_number=data.get("orderNum")
+                )
+                print(f"[MCP Server] /validate/order result: {result_msg}")
+                self._json(200, {"ok": True, "message": result_msg})
+        
+            except Exception as e:
+                print(f"[SERVER ERROR] {str(e)}")
+                self._json(500, {"ok": False, "error": str(e)})
+            return
         if parsed.path == "/mail/send":
             # Send an email with HTML body using SMTP envs
             try:
@@ -2145,6 +2505,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return
+        
         if parsed.path == "/repo/push":
             # Stage, commit, and push repo changes. Body: {commitMessage?, pushGitHub?, pushGitLab?}
             try:
